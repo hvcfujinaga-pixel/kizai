@@ -1,0 +1,1662 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>機材管理・予約システム v6</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+
+<style>
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+  .fade-in { animation: fadeIn 0.18s ease-in; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(-3px); } to { opacity:1; transform:translateY(0); } }
+
+  .spinner {
+    width: 14px; height: 14px;
+    border: 2px solid rgba(255,255,255,0.35);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block; vertical-align: middle;
+  }
+  .spinner-dark { border: 2px solid #e2e8f0; border-top-color: #6366f1; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .overlay-loading {
+    position: fixed; inset: 0;
+    background: rgba(255,255,255,0.65);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 100; backdrop-filter: blur(2px);
+  }
+  .sortable-ghost { opacity: 0.4; }
+  .sortable-chosen { background-color: #eef2ff !important; }
+  .drag-handle { cursor: grab; }
+  .drag-handle:active { cursor: grabbing; }
+  .modal-enter { animation: modalEnter 0.18s ease-out; }
+  @keyframes modalEnter { from { opacity:0; transform:scale(0.97); } to { opacity:1; transform:scale(1); } }
+  .cat-badge-clickable { cursor: pointer; transition: filter 0.12s, box-shadow 0.12s; }
+  .cat-badge-clickable:hover { filter: brightness(0.94); box-shadow: 0 0 0 2px rgba(99,102,241,0.3); }
+  .collapse-toggle { transition: transform 0.18s; }
+  .collapsed .collapse-toggle { transform: rotate(-90deg); }
+  .btn-busy { opacity: 0.65; pointer-events: none; }
+  .lock-overlay { position: relative; }
+  .lock-overlay::before {
+    content: ""; position: absolute; inset: 0;
+    background: rgba(248,250,252,0.88); backdrop-filter: blur(2px);
+    z-index: 10; border-radius: 0.5rem;
+  }
+  .lock-overlay::after {
+    content: "📅 先に「使用期間」を入力してください";
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 11; color: #64748b;
+    font-size: 0.875rem; font-weight: 600; pointer-events: none;
+  }
+  .equipment-disabled { opacity: 0.45; background-color: #f1f5f9 !important; }
+  .equipment-disabled .eq-check { pointer-events: none; }
+
+  /* カレンダーの空きセルをホバー */
+  .cal-empty-cell { cursor: pointer; transition: background-color 0.1s; }
+  .cal-empty-cell:hover { background-color: #c7d2fe !important; }
+
+  /* プリセット情報インジケーター */
+  .preset-indicator {
+    background: linear-gradient(90deg, #fef3c7 0%, #fde68a 100%);
+    border: 1px solid #fcd34d;
+  }
+
+  /* 印刷用CSS */
+  @media print {
+    body { background: white !important; }
+    .no-print { display: none !important; }
+    .print-area { padding: 0 !important; max-width: none !important; }
+    .print-page {
+      page-break-after: always;
+      padding: 12mm 10mm !important;
+    }
+    .print-table { font-size: 10pt; }
+    .print-table th, .print-table td {
+      border: 1px solid #333 !important;
+      padding: 4px 6px !important;
+    }
+    .print-table th { background: #f1f5f9 !important; }
+    .checkbox-print {
+      width: 14px; height: 14px;
+      border: 1.5px solid #333;
+      display: inline-block;
+    }
+  }
+</style>
+</head>
+
+<body class="bg-slate-50 text-slate-800 min-h-screen">
+
+<!-- ===================== 初期設定モーダル ===================== -->
+<div id="setup-modal" class="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 hidden no-print">
+  <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full p-6 modal-enter">
+    <h2 class="text-lg font-bold flex items-center gap-2 mb-3"><i data-lucide="settings" class="w-5 h-5 text-indigo-600"></i>初期設定</h2>
+    <p class="text-sm text-slate-600 mb-4">Google Apps Script の <strong>ウェブアプリURL</strong> を貼り付けてください。</p>
+    <input id="setup-url-input" type="url" placeholder="https://script.google.com/macros/s/.../exec" class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+    <div class="mt-4 flex gap-2 justify-end"><button id="setup-save" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700">保存して接続</button></div>
+  </div>
+</div>
+
+<!-- ===================== ヘッダー ===================== -->
+<header class="bg-white border-b border-slate-200 sticky top-0 z-30 no-print">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <h1 class="text-lg sm:text-xl font-bold flex items-center gap-2">
+      <i data-lucide="package" class="w-5 h-5 text-indigo-600"></i>
+      機材管理・予約システム
+      <span class="text-xs font-normal text-slate-400 hidden sm:inline">v6</span>
+    </h1>
+    <nav class="flex gap-1 sm:gap-2 items-center flex-wrap">
+      <button data-tab="dashboard"    class="tab-btn px-3 py-2 text-sm rounded-lg flex items-center gap-1.5 hover:bg-slate-100"><i data-lucide="layout-dashboard" class="w-4 h-4"></i><span class="hidden sm:inline">ダッシュボード</span></button>
+      <button data-tab="equipment"    class="tab-btn px-3 py-2 text-sm rounded-lg flex items-center gap-1.5 hover:bg-slate-100"><i data-lucide="boxes" class="w-4 h-4"></i><span class="hidden sm:inline">機材管理</span></button>
+      <button data-tab="reservations" class="tab-btn px-3 py-2 text-sm rounded-lg flex items-center gap-1.5 hover:bg-slate-100"><i data-lucide="calendar-plus" class="w-4 h-4"></i><span class="hidden sm:inline">予約登録</span></button>
+      <button data-tab="calendar"     class="tab-btn px-3 py-2 text-sm rounded-lg flex items-center gap-1.5 hover:bg-slate-100"><i data-lucide="calendar-days" class="w-4 h-4"></i><span class="hidden sm:inline">カレンダー</span></button>
+      <button data-tab="masters"      class="tab-btn px-3 py-2 text-sm rounded-lg flex items-center gap-1.5 hover:bg-slate-100"><i data-lucide="settings-2" class="w-4 h-4"></i><span class="hidden sm:inline">マスタ管理</span></button>
+      <button id="btn-refresh" title="再読み込み" class="p-2 rounded-lg hover:bg-slate-100 ml-1"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button>
+    </nav>
+  </div>
+  <div id="status-bar" class="max-w-6xl mx-auto px-4 pb-2 text-xs flex items-center gap-2 text-slate-500">
+    <span id="status-dot" class="w-2 h-2 rounded-full bg-slate-400"></span>
+    <span id="status-text">接続待機中...</span>
+  </div>
+</header>
+
+<!-- ===================== トースト ===================== -->
+<div id="toast" class="fixed top-24 right-4 z-50 hidden no-print">
+  <div id="toast-inner" class="px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium fade-in max-w-sm whitespace-pre-line"></div>
+</div>
+
+<!-- ===================== ローディング ===================== -->
+<div id="loading-overlay" class="overlay-loading hidden no-print">
+  <div class="bg-white px-5 py-3 rounded-lg shadow-lg flex items-center gap-3">
+    <span class="spinner spinner-dark"></span>
+    <span id="loading-text" class="text-sm text-slate-700">読み込み中...</span>
+  </div>
+</div>
+
+<!-- ===================== 機材詳細モーダル ===================== -->
+<div id="equipment-modal" class="fixed inset-0 bg-slate-900/60 z-40 hidden flex items-start justify-center p-4 overflow-y-auto no-print">
+  <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 modal-enter mt-8 mb-8">
+    <div class="flex items-start justify-between mb-4">
+      <div class="flex-1 min-w-0" id="modal-header"></div>
+      <button id="modal-close" class="p-2 rounded-lg hover:bg-slate-100 flex-shrink-0"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <div id="modal-body" class="space-y-4"></div>
+  </div>
+</div>
+
+<!-- ===================== 予約編集モーダル ===================== -->
+<div id="reservation-edit-modal" class="fixed inset-0 bg-slate-900/60 z-40 hidden flex items-start justify-center p-4 overflow-y-auto no-print">
+  <div class="bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 modal-enter mt-8 mb-8">
+    <div class="flex items-start justify-between mb-4">
+      <h3 class="text-lg font-bold flex items-center gap-2"><i data-lucide="edit-3" class="w-5 h-5 text-indigo-600"></i>予約を編集</h3>
+      <button id="re-modal-close" class="p-2 rounded-lg hover:bg-slate-100"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <div id="re-modal-body"></div>
+  </div>
+</div>
+
+<!-- ===================== 印刷期間選択モーダル ===================== -->
+<div id="print-modal" class="fixed inset-0 bg-slate-900/60 z-40 hidden flex items-center justify-center p-4 no-print">
+  <div class="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 modal-enter">
+    <div class="flex items-start justify-between mb-4">
+      <h3 class="text-lg font-bold flex items-center gap-2"><i data-lucide="printer" class="w-5 h-5 text-indigo-600"></i>持ち出しリスト印刷</h3>
+      <button id="print-modal-close" class="p-2 rounded-lg hover:bg-slate-100"><i data-lucide="x" class="w-5 h-5"></i></button>
+    </div>
+    <p class="text-sm text-slate-600 mb-3">印刷したい期間を選択してください。</p>
+    <div class="flex gap-2 flex-wrap mb-3">
+      <button data-print-preset="today" class="px-3 py-1.5 text-xs border border-slate-300 rounded hover:bg-slate-50">今日</button>
+      <button data-print-preset="tomorrow" class="px-3 py-1.5 text-xs border border-slate-300 rounded hover:bg-slate-50">明日</button>
+      <button data-print-preset="week" class="px-3 py-1.5 text-xs border border-slate-300 rounded hover:bg-slate-50">今週(月〜日)</button>
+      <button data-print-preset="next-week" class="px-3 py-1.5 text-xs border border-slate-300 rounded hover:bg-slate-50">来週</button>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="text-xs font-semibold text-slate-600">開始日</label>
+        <input id="print-start" type="date" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+      </div>
+      <div>
+        <label class="text-xs font-semibold text-slate-600">終了日</label>
+        <input id="print-end" type="date" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+      </div>
+    </div>
+    <div class="mt-5 flex gap-2 justify-end">
+      <button id="print-cancel" class="px-4 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">キャンセル</button>
+      <button id="print-execute" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center gap-1.5"><i data-lucide="printer" class="w-4 h-4"></i>印刷プレビューを開く</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== カテゴリーポップオーバー ===================== -->
+<div id="cat-popover" class="fixed bg-white border border-slate-200 rounded-lg shadow-2xl p-1.5 z-50 hidden min-w-[160px] max-h-[300px] overflow-y-auto no-print"></div>
+
+<!-- ===================== メイン ===================== -->
+<main class="max-w-6xl mx-auto px-4 py-6 print-area">
+
+  <!-- -------- ダッシュボード -------- -->
+  <section id="view-dashboard" class="view space-y-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="layout-dashboard" class="w-5 h-5"></i>ダッシュボード</h2>
+      <button id="btn-print-list" class="px-3 py-2 text-sm rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 flex items-center gap-1.5">
+        <i data-lucide="printer" class="w-4 h-4"></i>持ち出しリスト印刷
+      </button>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-xs text-slate-500">登録機材</div><div id="stat-equipment" class="text-2xl font-bold mt-1">-</div></div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-xs text-slate-500">全予約数</div><div id="stat-reservations" class="text-2xl font-bold mt-1">-</div></div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-xs text-slate-500">本日使用中</div><div id="stat-today" class="text-2xl font-bold mt-1 text-indigo-600">-</div></div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4"><div class="text-xs text-slate-500">今週の予約</div><div id="stat-week" class="text-2xl font-bold mt-1 text-emerald-600">-</div></div>
+    </div>
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <h3 class="font-semibold mb-4 flex items-center gap-2"><i data-lucide="clock" class="w-4 h-4"></i>直近の予約</h3>
+      <div id="recent-list"></div>
+    </div>
+    <div class="bg-sky-50 border border-sky-200 rounded-xl p-4 text-sm text-sky-900">
+      <div class="flex items-start gap-2">
+        <i data-lucide="cloud" class="w-4 h-4 mt-0.5 flex-shrink-0"></i>
+        <div class="flex-1">
+          <div class="font-semibold mb-1">クラウド共有モードで動作中</div>
+          <div class="text-xs">データはGoogleスプレッドシートに保存され、同じURLを開いた全員で共有されます。</div>
+          <div class="mt-2"><button id="btn-change-url" class="px-3 py-1.5 bg-white border border-sky-300 rounded-md text-xs hover:bg-sky-100 flex items-center gap-1"><i data-lucide="settings" class="w-3 h-3"></i>接続URLを変更</button></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- -------- 機材管理 -------- -->
+  <section id="view-equipment" class="view hidden space-y-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="boxes" class="w-5 h-5"></i>機材管理</h2>
+      <div class="flex items-center gap-2 text-xs">
+        <button id="eq-expand-all"   class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 flex items-center gap-1"><i data-lucide="chevrons-down" class="w-3 h-3"></i>すべて開く</button>
+        <button id="eq-collapse-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-100 flex items-center gap-1"><i data-lucide="chevrons-up" class="w-3 h-3"></i>すべて閉じる</button>
+      </div>
+    </div>
+    <div class="text-xs text-slate-500 flex items-center gap-1">
+      <i data-lucide="info" class="w-3.5 h-3.5"></i>機材名クリックで詳細・編集 / カテゴリーバッジで即変更 / ⠿ ドラッグで並び替え
+    </div>
+    <form id="form-equipment" class="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-12 gap-3">
+      <div class="sm:col-span-4"><label class="text-xs font-semibold text-slate-600">カテゴリー</label><select id="eq-category" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"></select></div>
+      <div class="sm:col-span-5"><label class="text-xs font-semibold text-slate-600">機材名</label><input id="eq-name" type="text" required placeholder="例: SONY FX3 (本体①)" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+      <div class="sm:col-span-3 flex items-end"><button id="btn-add-equipment" type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center justify-center gap-1.5"><i data-lucide="plus" class="w-4 h-4"></i><span>機材を追加</span></button></div>
+    </form>
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="font-semibold">登録済み機材</h3>
+        <select id="filter-category" class="px-2 py-1 border border-slate-300 rounded text-xs"><option value="">すべて表示</option></select>
+      </div>
+      <div id="equipment-list" class="space-y-2"></div>
+    </div>
+  </section>
+
+  <!-- -------- 予約登録 -------- -->
+  <section id="view-reservations" class="view hidden space-y-4">
+    <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="calendar-plus" class="w-5 h-5"></i>予約登録</h2>
+
+    <!-- プリセット情報インジケーター -->
+    <div id="preset-indicator" class="preset-indicator rounded-lg px-4 py-3 hidden flex items-center justify-between">
+      <div class="text-sm flex items-center gap-2"><i data-lucide="info" class="w-4 h-4 text-amber-700"></i><span id="preset-message" class="text-amber-900"></span></div>
+      <button id="preset-clear" class="text-xs px-3 py-1 bg-white border border-amber-300 rounded hover:bg-amber-50">クリア</button>
+    </div>
+
+    <form id="form-reservation" class="space-y-3">
+      <div class="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="text-sm font-semibold text-slate-700 flex items-center gap-1.5"><span class="bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full">STEP 1</span>予約情報を入力</div>
+        <div class="grid grid-cols-1 sm:grid-cols-12 gap-3">
+          <div class="sm:col-span-3"><label class="text-xs font-semibold text-slate-600">開始日 <span class="text-red-500">*</span></label><input id="rv-start" type="date" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+          <div class="sm:col-span-3"><label class="text-xs font-semibold text-slate-600">終了日 <span class="text-red-500">*</span></label><input id="rv-end" type="date" required class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+          <div class="sm:col-span-6">
+            <label class="text-xs font-semibold text-slate-600">担当者名 <span class="text-red-500">*</span></label>
+            <input id="rv-user" type="text" required placeholder="例: 山田 太郎(候補から選ぶか自由入力)" list="members-list" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+            <datalist id="members-list"></datalist>
+          </div>
+          <div class="sm:col-span-6"><label class="text-xs font-semibold text-slate-600">案件名(任意)</label><input id="rv-project" type="text" placeholder="例: 〇〇株式会社 ロケ撮影" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+          <div class="sm:col-span-6"><label class="text-xs font-semibold text-slate-600">メモ(任意)</label><input id="rv-memo" type="text" placeholder="例: 都内ロケ・三脚必須" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+        </div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div class="text-sm font-semibold text-slate-700 flex items-center gap-1.5"><span class="bg-indigo-600 text-white text-xs px-2 py-0.5 rounded-full">STEP 2</span>機材を選択<span id="selected-count" class="text-emerald-600 font-bold ml-2 text-sm">0件選択中</span></div>
+          <div class="flex items-center gap-2 text-xs flex-wrap">
+            <label class="flex items-center gap-1 px-2 py-1 border border-slate-300 rounded bg-white cursor-pointer hover:bg-slate-50"><input id="show-unavailable" type="checkbox" class="w-3.5 h-3.5 accent-indigo-600"><span>使用不可も表示</span></label>
+            <button type="button" id="rv-expand-all"   class="text-slate-500 hover:text-slate-700 flex items-center gap-0.5"><i data-lucide="chevrons-down" class="w-3 h-3"></i>全開</button>
+            <button type="button" id="rv-collapse-all" class="text-slate-500 hover:text-slate-700 flex items-center gap-0.5"><i data-lucide="chevrons-up"   class="w-3 h-3"></i>全閉</button>
+            <button type="button" id="btn-clear-equipment" class="text-slate-500 hover:text-slate-700 underline">選択クリア</button>
+          </div>
+        </div>
+        <input id="eq-search" type="text" placeholder="🔍 機材名で絞り込み..." class="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+        <div id="equipment-checklist-wrapper">
+          <div id="equipment-checklist" class="border border-slate-300 rounded-lg max-h-72 overflow-y-auto p-2 space-y-1 bg-slate-50"></div>
+        </div>
+        <div class="flex justify-end pt-1"><button id="btn-add-reservation" type="submit" class="px-6 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-semibold hover:bg-emerald-700 flex items-center gap-1.5"><i data-lucide="check" class="w-4 h-4"></i><span>予約を登録</span></button></div>
+      </div>
+    </form>
+
+    <div class="bg-white border border-slate-200 rounded-xl p-4">
+      <h3 class="font-semibold mb-3">予約一覧</h3>
+      <div id="reservation-list" class="space-y-2"></div>
+    </div>
+  </section>
+
+  <!-- -------- カレンダー -------- -->
+  <section id="view-calendar" class="view hidden space-y-4">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="calendar-days" class="w-5 h-5"></i>稼働カレンダー</h2>
+      <div class="flex items-center gap-2 flex-wrap">
+        <button id="cal-expand-all"   class="px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-100 flex items-center gap-1"><i data-lucide="chevrons-down" class="w-3 h-3"></i>全開</button>
+        <button id="cal-collapse-all" class="px-2 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-100 flex items-center gap-1"><i data-lucide="chevrons-up" class="w-3 h-3"></i>全閉</button>
+        <button id="cal-prev"  class="p-2 rounded-lg border border-slate-300 hover:bg-slate-100"><i data-lucide="chevron-left"  class="w-4 h-4"></i></button>
+        <div id="cal-label" class="font-semibold min-w-[140px] text-center text-sm">-</div>
+        <button id="cal-next"  class="p-2 rounded-lg border border-slate-300 hover:bg-slate-100"><i data-lucide="chevron-right" class="w-4 h-4"></i></button>
+        <button id="cal-today" class="px-3 py-2 text-xs rounded-lg border border-slate-300 hover:bg-slate-100">今日</button>
+        <select id="cal-mode" class="px-2 py-2 border border-slate-300 rounded-lg text-xs"><option value="month">月表示</option><option value="week">週表示</option></select>
+      </div>
+    </div>
+    <div class="text-xs text-slate-500 flex items-center gap-1">
+      <i data-lucide="info" class="w-3.5 h-3.5"></i>空きセルをクリックすると、その機材・日付で予約フォームが開きます
+    </div>
+    <div class="bg-white border border-slate-200 rounded-xl p-3 overflow-x-auto">
+      <div id="calendar-area"></div>
+    </div>
+  </section>
+
+  <!-- -------- マスタ管理(カテゴリー + 担当者) -------- -->
+  <section id="view-masters" class="view hidden space-y-4">
+    <h2 class="text-xl font-bold flex items-center gap-2"><i data-lucide="settings-2" class="w-5 h-5"></i>マスタ管理</h2>
+
+    <!-- タブ -->
+    <div class="flex gap-1 border-b border-slate-200">
+      <button data-master-tab="categories" class="master-tab-btn px-4 py-2 text-sm font-semibold rounded-t-lg flex items-center gap-1.5"><i data-lucide="tags" class="w-4 h-4"></i>カテゴリー</button>
+      <button data-master-tab="members"    class="master-tab-btn px-4 py-2 text-sm font-semibold rounded-t-lg flex items-center gap-1.5"><i data-lucide="users" class="w-4 h-4"></i>担当者</button>
+    </div>
+
+    <!-- カテゴリー管理 -->
+    <div id="master-categories" class="master-pane space-y-3">
+      <form id="form-category" class="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-12 gap-3">
+        <div class="sm:col-span-9"><label class="text-xs font-semibold text-slate-600">新しいカテゴリー名</label><input id="cat-name" type="text" required placeholder="例: ドローン" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+        <div class="sm:col-span-3 flex items-end"><button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center justify-center gap-1.5"><i data-lucide="plus" class="w-4 h-4"></i><span>カテゴリー追加</span></button></div>
+      </form>
+      <div class="bg-white border border-slate-200 rounded-xl p-4">
+        <h3 class="font-semibold mb-3 text-sm">登録済みカテゴリー</h3>
+        <div id="category-list" class="space-y-2"></div>
+      </div>
+    </div>
+
+    <!-- 担当者管理 -->
+    <div id="master-members" class="master-pane space-y-3 hidden">
+      <form id="form-member" class="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-12 gap-3">
+        <div class="sm:col-span-9"><label class="text-xs font-semibold text-slate-600">新しい担当者名</label><input id="member-name" type="text" required placeholder="例: 山田 太郎" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" /></div>
+        <div class="sm:col-span-3 flex items-end"><button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center justify-center gap-1.5"><i data-lucide="plus" class="w-4 h-4"></i><span>担当者追加</span></button></div>
+      </form>
+      <div class="bg-white border border-slate-200 rounded-xl p-4">
+        <h3 class="font-semibold mb-3 text-sm">登録済み担当者</h3>
+        <div class="text-xs text-slate-500 mb-3"><i data-lucide="info" class="w-3 h-3 inline"></i> ここに登録した担当者は予約画面のドロップダウン候補に表示されます。自由入力も可能です。</div>
+        <div id="member-list" class="space-y-2"></div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="text-center text-xs text-slate-400 py-6 no-print">© Equipment Manager v6 — Performance Edition</footer>
+
+<!-- ===================== 印刷専用エリア(本体) ===================== -->
+<div id="print-page" class="hidden"></div>
+
+<script>
+/* =========================================================
+   設定
+   ========================================================= */
+const URL_KEY = "equipment-manager-api-url";
+const COLLAPSE_KEY = "equipment-manager-collapse-state-v3";
+
+function getApiUrl() { return localStorage.getItem(URL_KEY) || ""; }
+function setApiUrl(u) { localStorage.setItem(URL_KEY, u); }
+function loadCollapseState() { try { return JSON.parse(localStorage.getItem(COLLAPSE_KEY)||"{}"); } catch(e){ return {}; } }
+function saveCollapseState() { localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapseState)); }
+
+/* =========================================================
+   状態
+   ========================================================= */
+let state = { equipment:[], reservations:[], repairs:[], categories:[], members:[] };
+let isLoading = false;
+let selectedEquipmentIds = new Set();
+let currentModalEquipmentId = null;
+let modalEditMode = false;
+let collapseState = loadCollapseState();
+let showUnavailable = false;
+let editingReservationGroupId = null;
+
+// プリセット(カレンダーから来た予約フォームの初期値)
+let reservationPreset = null;
+
+function getCollapsed(view, cat) {
+  if (!collapseState[view]) collapseState[view] = {};
+  return !!collapseState[view][cat];
+}
+function setCollapsed(view, cat, v) {
+  if (!collapseState[view]) collapseState[view] = {};
+  collapseState[view][cat] = v;
+  saveCollapseState();
+}
+
+/* =========================================================
+   API
+   ========================================================= */
+async function apiGet() {
+  const url = getApiUrl();
+  if (!url) throw new Error("接続URLが未設定です");
+  const res = await fetch(url, { method:"GET" });
+  if (!res.ok) throw new Error("通信エラー: "+res.status);
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error||"サーバーエラー");
+  return json.data;
+}
+async function apiPost(action, payload) {
+  const url = getApiUrl();
+  if (!url) throw new Error("接続URLが未設定です");
+  const res = await fetch(url, {
+    method:"POST",
+    headers:{"Content-Type":"text/plain;charset=utf-8"},
+    body: JSON.stringify({action, payload}),
+    redirect:"follow"
+  });
+  if (!res.ok) throw new Error("通信エラー: "+res.status);
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error||"サーバーエラー");
+  return json.result;
+}
+
+/* =========================================================
+   ⚡ 楽観的更新(差分スナップショット版)
+   - state全体ではなく「変更前の値だけ」を覚える
+   - エラー時はその値だけ書き戻す
+   - ボタンは300msで解放
+   ========================================================= */
+async function optimistic({ apply, revert, action, payload, rerender, busyButtonId, successMsg }) {
+  // ⚡ 軽量スナップショット: revert関数だけ覚える
+  apply();
+  if (rerender) rerender();
+  if (busyButtonId) setButtonBusy(busyButtonId, true);
+  setTimeout(() => { if (busyButtonId) setButtonBusy(busyButtonId, false); }, 300);
+  setStatus("loading", "バックグラウンドで保存中...");
+  try {
+    const result = await apiPost(action, payload);
+    if (successMsg) showToast(successMsg);
+    setStatus("ok", `保存完了 (${new Date().toLocaleTimeString()})`);
+    return result;
+  } catch (err) {
+    if (revert) revert();
+    if (rerender) rerender();
+    setStatus("error", "保存に失敗しました — 変更を元に戻しました");
+    showToast("エラー: "+err.message+"\n変更を元に戻しました", "error");
+    if (busyButtonId) setButtonBusy(busyButtonId, false);
+    throw err;
+  }
+}
+
+async function reloadAll(showSpinner=true) {
+  if (showSpinner) showLoading("最新データを読み込み中...");
+  setStatus("loading", "読み込み中...");
+  try {
+    const data = await apiGet();
+    state.equipment    = data.equipment    || [];
+    state.reservations = data.reservations || [];
+    state.repairs      = data.repairs      || [];
+    state.categories   = data.categories   || [];
+    state.members      = data.members      || [];
+    setStatus("ok", `接続OK (${new Date().toLocaleTimeString()} 更新)`);
+    refreshCategoryDropdowns();
+    refreshMemberDatalist();
+    rerenderCurrentView();
+  } catch(err) {
+    setStatus("error", "接続エラー: "+err.message);
+    showToast("読み込みに失敗しました: "+err.message, "error");
+  } finally {
+    if (showSpinner) hideLoading();
+  }
+}
+
+function rerenderCurrentView() {
+  const vis = Array.from(document.querySelectorAll(".view")).find(v=>!v.classList.contains("hidden"));
+  if (!vis) return;
+  const id = vis.id.replace("view-","");
+  if (id==="dashboard")    renderDashboard();
+  if (id==="equipment")    renderEquipmentList();
+  if (id==="reservations") { renderEquipmentChecklist(); renderReservationList(); }
+  if (id==="calendar")     renderCalendar();
+  if (id==="masters")      { renderCategoryList(); renderMemberList(); }
+}
+
+/* =========================================================
+   UI ヘルパー
+   ========================================================= */
+function showToast(msg, type="success") {
+  const t = document.getElementById("toast");
+  const i = document.getElementById("toast-inner");
+  i.textContent = msg;
+  i.className = "px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium fade-in max-w-sm whitespace-pre-line "
+    +(type==="error"?"bg-red-600":type==="info"?"bg-slate-700":"bg-emerald-600");
+  t.classList.remove("hidden");
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=>t.classList.add("hidden"), type==="error"?5000:2500);
+}
+function showLoading(txt="通信中...") {
+  document.getElementById("loading-text").textContent = txt;
+  document.getElementById("loading-overlay").classList.remove("hidden");
+  isLoading = true;
+}
+function hideLoading() {
+  document.getElementById("loading-overlay").classList.add("hidden");
+  isLoading = false;
+}
+function setStatus(type, txt) {
+  const dot = document.getElementById("status-dot");
+  const el  = document.getElementById("status-text");
+  el.textContent = txt;
+  dot.className = "w-2 h-2 rounded-full "
+    +(type==="ok"?"bg-emerald-500":type==="loading"?"bg-amber-400 animate-pulse":type==="error"?"bg-red-500":"bg-slate-400");
+}
+function setButtonBusy(id, busy) {
+  const btn = document.getElementById(id);
+  if (!btn) return null;
+  if (busy) {
+    if (!btn.dataset.origHtml) btn.dataset.origHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner"></span>';
+    btn.classList.add("btn-busy"); btn.disabled = true;
+  } else {
+    if (btn.dataset.origHtml) { btn.innerHTML = btn.dataset.origHtml; delete btn.dataset.origHtml; }
+    btn.classList.remove("btn-busy"); btn.disabled = false;
+    lucide.createIcons();
+  }
+  return btn;
+}
+
+const STATIC_COLORS = {
+  "カメラ":"bg-rose-100 text-rose-700 border-rose-200","音声":"bg-blue-100 text-blue-700 border-blue-200",
+  "レンズ":"bg-purple-100 text-purple-700 border-purple-200","照明":"bg-amber-100 text-amber-700 border-amber-200",
+  "カード":"bg-emerald-100 text-emerald-700 border-emerald-200","モニター":"bg-cyan-100 text-cyan-700 border-cyan-200",
+  "三脚":"bg-slate-200 text-slate-700 border-slate-300",
+};
+const FALLBACK_PALETTE = [
+  "bg-pink-100 text-pink-700 border-pink-200","bg-orange-100 text-orange-700 border-orange-200",
+  "bg-lime-100 text-lime-700 border-lime-200","bg-teal-100 text-teal-700 border-teal-200",
+  "bg-indigo-100 text-indigo-700 border-indigo-200","bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200",
+  "bg-yellow-100 text-yellow-700 border-yellow-200",
+];
+function categoryColor(cat) {
+  if (STATIC_COLORS[cat]) return STATIC_COLORS[cat];
+  let h=0; for(let i=0;i<(cat||"").length;i++) h=(h*31+cat.charCodeAt(i))>>>0;
+  return FALLBACK_PALETTE[h%FALLBACK_PALETTE.length];
+}
+function categoryBandColor(cat) {
+  const c = categoryColor(cat);
+  const m = c.match(/bg-(\w+)-\d+/);
+  return m ? `bg-${m[1]}-400` : "bg-indigo-400";
+}
+function escapeHtml(s) {
+  return String(s??"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+function isOverlap(as,ae,bs,be){ return as<=be && bs<=ae; }
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,7); }
+
+/* =========================================================
+   カテゴリー / 担当者 ドロップダウン更新
+   ========================================================= */
+function refreshCategoryDropdowns() {
+  const el = document.getElementById("eq-category");
+  if (el) el.innerHTML = state.categories.map(c=>`<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join("");
+  const f = document.getElementById("filter-category");
+  if (f) {
+    const cur = f.value;
+    f.innerHTML = `<option value="">すべて表示</option>`+state.categories.map(c=>`<option value="${escapeHtml(c.name)}">${escapeHtml(c.name)}</option>`).join("");
+    f.value = cur;
+  }
+}
+function refreshMemberDatalist() {
+  const dl = document.getElementById("members-list");
+  if (dl) dl.innerHTML = state.members.map(m=>`<option value="${escapeHtml(m.name)}">`).join("");
+}
+
+/* =========================================================
+   タブ切り替え
+   ========================================================= */
+document.querySelectorAll(".tab-btn").forEach(t=>t.addEventListener("click",()=>switchTab(t.dataset.tab)));
+function switchTab(name) {
+  document.querySelectorAll(".view").forEach(v=>v.classList.toggle("hidden", v.id!=="view-"+name));
+  document.querySelectorAll(".tab-btn").forEach(t=>{
+    const a = t.dataset.tab===name;
+    t.classList.toggle("bg-indigo-600",a); t.classList.toggle("text-white",a);
+    t.classList.toggle("hover:bg-indigo-700",a); t.classList.toggle("hover:bg-slate-100",!a);
+  });
+  if (name==="dashboard")    renderDashboard();
+  if (name==="equipment")    renderEquipmentList();
+  if (name==="reservations") {
+    applyPresetIfAny();
+    renderEquipmentChecklist();
+    renderReservationList();
+  }
+  if (name==="calendar")     renderCalendar();
+  if (name==="masters")      { switchMasterTab(currentMasterTab); }
+  history.replaceState(null,"","#"+name);
+}
+
+// マスタタブ切替
+let currentMasterTab = "categories";
+document.querySelectorAll(".master-tab-btn").forEach(t=>t.addEventListener("click",()=>switchMasterTab(t.dataset.masterTab)));
+function switchMasterTab(name) {
+  currentMasterTab = name;
+  document.querySelectorAll(".master-pane").forEach(p=>p.classList.toggle("hidden", p.id!=="master-"+name));
+  document.querySelectorAll(".master-tab-btn").forEach(t=>{
+    const a = t.dataset.masterTab===name;
+    t.classList.toggle("bg-indigo-600",a); t.classList.toggle("text-white",a);
+    t.classList.toggle("text-slate-600",!a); t.classList.toggle("hover:bg-slate-100",!a);
+  });
+  if (name==="categories") renderCategoryList();
+  if (name==="members")    renderMemberList();
+}
+
+/* =========================================================
+   カテゴリーポップオーバー
+   ========================================================= */
+function showCategoryPopover(target, currentCat, onSelect) {
+  const pop = document.getElementById("cat-popover");
+  pop.innerHTML = state.categories.map(c=>`
+    <button data-pick="${escapeHtml(c.name)}" class="block w-full text-left px-3 py-1.5 rounded hover:bg-indigo-50 text-sm flex items-center gap-2 ${c.name===currentCat?"bg-indigo-50 font-semibold":""}">
+      <span class="px-2 py-0.5 text-xs rounded border ${categoryColor(c.name)}">${escapeHtml(c.name)}</span>
+      ${c.name===currentCat?`<i data-lucide="check" class="w-3 h-3 ml-auto text-indigo-600"></i>`:""}
+    </button>`).join("");
+  pop.classList.remove("hidden"); lucide.createIcons();
+  const r = target.getBoundingClientRect();
+  pop.style.top=(r.bottom+4)+"px"; pop.style.left=r.left+"px";
+  const pr = pop.getBoundingClientRect();
+  if (pr.right>window.innerWidth-8) pop.style.left=(window.innerWidth-pr.width-8)+"px";
+  pop.querySelectorAll("[data-pick]").forEach(b=>b.addEventListener("click",()=>{
+    hideCategoryPopover();
+    if(b.dataset.pick!==currentCat) onSelect(b.dataset.pick);
+  }));
+}
+function hideCategoryPopover(){ document.getElementById("cat-popover").classList.add("hidden"); }
+document.addEventListener("click", e=>{ if(!e.target.closest("#cat-popover")&&!e.target.closest("[data-cat-edit]")) hideCategoryPopover(); });
+window.addEventListener("scroll", hideCategoryPopover, true);
+
+/* =========================================================
+   機材管理(リスト + ドラッグ + 折りたたみ)
+   ⚡ ドラッグ中はDOMをそのまま使い、再描画を最小化(ソフト更新)
+   ========================================================= */
+document.getElementById("form-equipment").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const category = document.getElementById("eq-category").value;
+  const name     = document.getElementById("eq-name").value.trim();
+  if (!name) return;
+  if (state.equipment.find(eq=>eq.category===category&&eq.name===name)) {
+    showToast("同じ名前の機材が既に登録されています","error"); return;
+  }
+  const tempId="tmp_"+uid();
+  const maxOrder = state.equipment.reduce((m,e)=>Math.max(m,Number(e.order)||0),0);
+  const newEq = { id:tempId, category, name, createdAt:new Date().toISOString(), order:maxOrder+1, purchaseDate:"", serialNo:"", memo:"" };
+  state.equipment.push(newEq);
+  document.getElementById("eq-name").value = "";
+  renderEquipmentList();
+  setButtonBusy("btn-add-equipment",true);
+  setStatus("loading","バックグラウンドで保存中...");
+  try {
+    const result = await apiPost("addEquipment",{category,name});
+    const t=state.equipment.find(e=>e.id===tempId);
+    if(t&&result.id) t.id=result.id;
+    showToast("機材を追加しました");
+    setStatus("ok",`保存完了 (${new Date().toLocaleTimeString()})`);
+    // ⚡ 軽量再描画: IDを差し替えるだけなので全体描画でOK
+    renderEquipmentList();
+  } catch(err) {
+    state.equipment = state.equipment.filter(e=>e.id!==tempId);
+    renderEquipmentList();
+    setStatus("error","保存に失敗しました — 変更を元に戻しました");
+    showToast("エラー: "+err.message+"\n変更を元に戻しました","error");
+  } finally { setButtonBusy("btn-add-equipment",false); }
+});
+
+document.getElementById("filter-category").addEventListener("change", renderEquipmentList);
+document.getElementById("eq-expand-all").addEventListener("click",  ()=>{ state.categories.forEach(c=>setCollapsed("equipment",c.name,false)); renderEquipmentList(); });
+document.getElementById("eq-collapse-all").addEventListener("click", ()=>{ state.categories.forEach(c=>setCollapsed("equipment",c.name,true));  renderEquipmentList(); });
+
+let sortableInstances=[];
+function destroySortables(){ sortableInstances.forEach(s=>{try{s.destroy();}catch(e){}}); sortableInstances=[]; }
+
+function renderEquipmentList() {
+  const list=document.getElementById("equipment-list");
+  destroySortables();
+  const filter=document.getElementById("filter-category").value;
+  const items=filter?state.equipment.filter(e=>e.category===filter):state.equipment;
+  if(state.equipment.length===0){
+    list.innerHTML=`<div class="text-center py-8 text-slate-400 text-sm"><i data-lucide="inbox" class="w-8 h-8 mx-auto mb-2"></i>機材がまだ登録されていません</div>`;
+    lucide.createIcons(); return;
+  }
+  const groups={}; items.forEach(eq=>{ if(!groups[eq.category])groups[eq.category]=[]; groups[eq.category].push(eq); });
+  const catOrder=state.categories.map(c=>c.name);
+  const sortedCats=Object.keys(groups).sort((a,b)=>{ const ai=catOrder.indexOf(a),bi=catOrder.indexOf(b); return(ai===-1?999:ai)-(bi===-1?999:bi); });
+  let html="";
+  sortedCats.forEach(cat=>{
+    const collapsed=getCollapsed("equipment",cat);
+    html+=`<div class="mb-3 ${collapsed?"collapsed":""}" data-cat-section="${escapeHtml(cat)}">
+      <button type="button" class="cat-toggle w-full text-left text-xs font-semibold text-slate-600 mb-1.5 flex items-center gap-1.5 hover:bg-slate-50 px-1 py-1 rounded" data-cat-toggle="${escapeHtml(cat)}">
+        <i data-lucide="chevron-down" class="w-3.5 h-3.5 collapse-toggle"></i>
+        <span>${escapeHtml(cat)}</span><span class="text-slate-400">(${groups[cat].length})</span>
+      </button>
+      <div class="sortable-list space-y-1.5 ${collapsed?"hidden":""}" data-category="${escapeHtml(cat)}">`;
+    groups[cat].forEach(eq=>{
+      const rc=state.reservations.filter(r=>r.equipmentId===eq.id).length;
+      const rp=state.repairs.filter(r=>r.equipmentId===eq.id).length;
+      html+=`<div class="flex items-center gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100" data-eq-id="${eq.id}">
+        <span class="drag-handle text-slate-400 hover:text-slate-600 select-none" title="ドラッグで並び替え"><i data-lucide="grip-vertical" class="w-4 h-4 pointer-events-none"></i></span>
+        <span data-cat-edit="${eq.id}" class="cat-badge-clickable px-2 py-0.5 text-xs rounded border ${categoryColor(eq.category)}" title="クリックでカテゴリー変更">${escapeHtml(eq.category)}</span>
+        <button data-open-detail="${eq.id}" class="flex-1 min-w-0 flex items-center gap-2 text-left hover:underline">
+          <span class="font-medium text-sm truncate">${escapeHtml(eq.name)}</span>
+          ${rc>0?`<span class="text-xs text-slate-500 flex-shrink-0">📅${rc}</span>`:""}
+          ${rp>0?`<span class="text-xs text-amber-600 flex-shrink-0">🔧${rp}</span>`:""}
+        </button>
+        <button data-del-eq="${eq.id}" class="p-1.5 text-red-600 hover:bg-red-50 rounded flex-shrink-0"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+      </div>`;
+    });
+    html+=`</div></div>`;
+  });
+  list.innerHTML=html; lucide.createIcons();
+
+  list.querySelectorAll("[data-cat-toggle]").forEach(btn=>btn.addEventListener("click",()=>{
+    const cat=btn.dataset.catToggle; setCollapsed("equipment",cat,!getCollapsed("equipment",cat)); renderEquipmentList();
+  }));
+  list.querySelectorAll("[data-cat-edit]").forEach(badge=>badge.addEventListener("click",e=>{
+    e.stopPropagation();
+    const id=badge.dataset.catEdit; const eq=state.equipment.find(x=>x.id===id); if(!eq) return;
+    showCategoryPopover(badge, eq.category, async newCat=>{
+      const oldCat = eq.category;
+      await optimistic({
+        apply:()=>{ const t=state.equipment.find(x=>x.id===id); if(t) t.category=newCat; },
+        revert:()=>{ const t=state.equipment.find(x=>x.id===id); if(t) t.category=oldCat; },
+        action:"updateEquipment", payload:{id, category:newCat, name:eq.name},
+        rerender:renderEquipmentList, successMsg:`「${eq.name}」を「${newCat}」に移動しました`
+      }).catch(()=>{});
+    });
+  }));
+  list.querySelectorAll("[data-del-eq]").forEach(btn=>btn.addEventListener("click",async e=>{
+    e.stopPropagation();
+    const id=btn.dataset.delEq; const eq=state.equipment.find(e=>e.id===id);
+    const lk=state.reservations.filter(r=>r.equipmentId===id);
+    const rp=state.repairs.filter(r=>r.equipmentId===id);
+    let msg=`「${eq.name}」を削除しますか?`;
+    if(lk.length>0||rp.length>0){ msg+=`\n紐づくデータも削除されます:`; if(lk.length>0)msg+=`\n - 予約 ${lk.length} 件`; if(rp.length>0)msg+=`\n - 修復履歴 ${rp.length} 件`; }
+    if(!confirm(msg)) return;
+    const removedEq = eq;
+    const removedRvs = state.reservations.filter(r=>r.equipmentId===id);
+    const removedRps = state.repairs.filter(r=>r.equipmentId===id);
+    await optimistic({
+      apply:()=>{ state.equipment=state.equipment.filter(e=>e.id!==id); state.reservations=state.reservations.filter(r=>r.equipmentId!==id); state.repairs=state.repairs.filter(r=>r.equipmentId!==id); },
+      revert:()=>{ state.equipment.push(removedEq); state.reservations.push(...removedRvs); state.repairs.push(...removedRps); },
+      action:"deleteEquipment", payload:{id}, rerender:renderEquipmentList, successMsg:"機材を削除しました"
+    }).catch(()=>{});
+  }));
+  list.querySelectorAll("[data-open-detail]").forEach(btn=>btn.addEventListener("click",()=>openEquipmentModal(btn.dataset.openDetail)));
+
+  /* ⚡ ドラッグ&ドロップ:
+     onEnd で「描画はソフト更新」(state内のorderだけ書き換え)、
+     完全な再描画は次回の操作時に。これでドラッグ後の体感がほぼ瞬時に。 */
+  list.querySelectorAll(".sortable-list").forEach(el=>{
+    const s=Sortable.create(el,{
+      handle:".drag-handle", animation:150, group:"equipment-list",
+      onEnd: async evt=>{
+        const newCat=evt.to.dataset.category;
+        const eqId=evt.item.dataset.eqId;
+        const target=state.equipment.find(e=>e.id===eqId);
+        const oldCat=target?target.category:null;
+        const catChanged=target&&newCat&&target.category!==newCat;
+
+        // DOM順から orderedIds 取得
+        const orderedIds=[];
+        list.querySelectorAll(".sortable-list").forEach(ce=>ce.querySelectorAll("[data-eq-id]").forEach(it=>orderedIds.push(it.dataset.eqId)));
+
+        // ⚡ stateの軽量更新(差分スナップショット)
+        const oldOrders = {};
+        state.equipment.forEach(eq=>{ oldOrders[eq.id]=eq.order; });
+        if(catChanged) target.category=newCat;
+        const idToOrder={}; orderedIds.forEach((id,i)=>{ idToOrder[id]=i+1; });
+        state.equipment.forEach(eq=>{ if(idToOrder[eq.id]!=null) eq.order=idToOrder[eq.id]; });
+
+        // ⚡ DOM側のカテゴリーバッジ表示だけ更新(再描画はしない)
+        if (catChanged) {
+          const badge = evt.item.querySelector("[data-cat-edit]");
+          if (badge) {
+            badge.textContent = newCat;
+            badge.className = `cat-badge-clickable px-2 py-0.5 text-xs rounded border ${categoryColor(newCat)}`;
+          }
+        }
+
+        // 件数表示の更新(カテゴリー数表示)
+        list.querySelectorAll("[data-cat-toggle]").forEach(btn=>{
+          const cat = btn.dataset.catToggle;
+          const count = state.equipment.filter(e=>e.category===cat).length;
+          const span = btn.querySelector(".text-slate-400");
+          if (span) span.textContent = `(${count})`;
+        });
+
+        setStatus("loading","バックグラウンドで保存中...");
+        try {
+          await apiPost("batchUpdateEquipment",{ orderedIds, categoryChange:catChanged?{id:eqId,category:newCat,name:target.name}:null });
+          if(catChanged) showToast(`「${target.name}」を「${newCat}」に移動しました`);
+          setStatus("ok",`保存完了 (${new Date().toLocaleTimeString()})`);
+        } catch(err) {
+          // ロールバック: 差分だけ戻す
+          if(catChanged && target) target.category=oldCat;
+          state.equipment.forEach(eq=>{ if(oldOrders[eq.id]!=null) eq.order=oldOrders[eq.id]; });
+          renderEquipmentList();
+          setStatus("error","保存に失敗しました — 変更を元に戻しました");
+          showToast("エラー: "+err.message+"\n変更を元に戻しました","error");
+        }
+      }
+    });
+    sortableInstances.push(s);
+  });
+}
+
+/* =========================================================
+   機材詳細モーダル
+   ========================================================= */
+function openEquipmentModal(id){ currentModalEquipmentId=id; modalEditMode=false; renderEquipmentModal(); document.getElementById("equipment-modal").classList.remove("hidden"); }
+function closeEquipmentModal(){ currentModalEquipmentId=null; modalEditMode=false; document.getElementById("equipment-modal").classList.add("hidden"); }
+document.getElementById("modal-close").addEventListener("click", closeEquipmentModal);
+document.getElementById("equipment-modal").addEventListener("click", e=>{ if(e.target.id==="equipment-modal") closeEquipmentModal(); });
+
+function renderEquipmentModal(){
+  const eq=state.equipment.find(e=>e.id===currentModalEquipmentId);
+  if(!eq){ closeEquipmentModal(); return; }
+  const repairs=state.repairs.filter(r=>r.equipmentId===eq.id).sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const rvs=state.reservations.filter(r=>r.equipmentId===eq.id);
+  const hdr=document.getElementById("modal-header");
+  const body=document.getElementById("modal-body");
+  hdr.innerHTML=`<div class="flex items-center gap-2 flex-wrap"><span class="px-2 py-0.5 text-xs rounded border ${categoryColor(eq.category)}">${escapeHtml(eq.category)}</span><h3 class="text-lg font-bold truncate">${escapeHtml(eq.name)}</h3></div><div class="text-xs text-slate-500 mt-1">予約 ${rvs.length} 件 / 修復履歴 ${repairs.length} 件</div>`;
+  if(modalEditMode){
+    body.innerHTML=`
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-800 flex items-center gap-2"><i data-lucide="edit-3" class="w-4 h-4"></i>編集モード</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div><label class="text-xs font-semibold text-slate-600">カテゴリー</label><select id="edit-category" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">${state.categories.map(c=>`<option value="${escapeHtml(c.name)}" ${c.name===eq.category?"selected":""}>${escapeHtml(c.name)}</option>`).join("")}</select></div>
+        <div><label class="text-xs font-semibold text-slate-600">機材名</label><input id="edit-name" type="text" value="${escapeHtml(eq.name)}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" /></div>
+        <div><label class="text-xs font-semibold text-slate-600">購入年月</label><input id="edit-purchaseDate" type="month" value="${escapeHtml(eq.purchaseDate||"")}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" /></div>
+        <div><label class="text-xs font-semibold text-slate-600">シリアル番号</label><input id="edit-serialNo" type="text" value="${escapeHtml(eq.serialNo||"")}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" /></div>
+        <div class="sm:col-span-2"><label class="text-xs font-semibold text-slate-600">メモ</label><textarea id="edit-memo" rows="3" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm">${escapeHtml(eq.memo||"")}</textarea></div>
+      </div>
+      <div class="flex gap-2 justify-end pt-2">
+        <button id="btn-cancel-edit" class="px-4 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">キャンセル</button>
+        <button id="btn-save-edit" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center gap-1.5"><i data-lucide="save" class="w-4 h-4"></i>保存</button>
+      </div>`;
+    lucide.createIcons();
+    document.getElementById("btn-cancel-edit").addEventListener("click",()=>{ modalEditMode=false; renderEquipmentModal(); });
+    document.getElementById("btn-save-edit").addEventListener("click", async()=>{
+      const p={ id:eq.id, category:document.getElementById("edit-category").value, name:document.getElementById("edit-name").value.trim(), purchaseDate:document.getElementById("edit-purchaseDate").value, serialNo:document.getElementById("edit-serialNo").value.trim(), memo:document.getElementById("edit-memo").value.trim() };
+      if(!p.name){ showToast("機材名は必須です","error"); return; }
+      const old = { category:eq.category, name:eq.name, purchaseDate:eq.purchaseDate, serialNo:eq.serialNo, memo:eq.memo };
+      try {
+        await optimistic({
+          apply:()=>{ const t=state.equipment.find(e=>e.id===eq.id); if(t) Object.assign(t,p); },
+          revert:()=>{ const t=state.equipment.find(e=>e.id===eq.id); if(t) Object.assign(t,old); },
+          action:"updateEquipment", payload:p, rerender:renderEquipmentModal, busyButtonId:"btn-save-edit", successMsg:"機材情報を更新しました"
+        });
+        modalEditMode=false; renderEquipmentModal();
+      } catch(err){}
+    });
+  } else {
+    body.innerHTML=`
+      <div class="bg-slate-50 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+        <div><div class="text-xs text-slate-500">購入年月</div><div>${eq.purchaseDate?escapeHtml(eq.purchaseDate):'<span class="text-slate-400">未登録</span>'}</div></div>
+        <div><div class="text-xs text-slate-500">シリアル番号</div><div class="font-mono text-xs">${eq.serialNo?escapeHtml(eq.serialNo):'<span class="text-slate-400">未登録</span>'}</div></div>
+        <div class="sm:col-span-2"><div class="text-xs text-slate-500">メモ</div><div class="whitespace-pre-wrap">${eq.memo?escapeHtml(eq.memo):'<span class="text-slate-400">なし</span>'}</div></div>
+      </div>
+      <div>
+        <h4 class="font-semibold text-sm flex items-center gap-1.5 mb-2"><i data-lucide="wrench" class="w-4 h-4"></i>修復履歴(${repairs.length}件)</h4>
+        <form id="form-repair" class="bg-amber-50 border border-amber-200 rounded-lg p-3 grid grid-cols-1 sm:grid-cols-12 gap-2 mb-2">
+          <input id="repair-date" type="date" required class="sm:col-span-3 px-2 py-1.5 border border-slate-300 rounded text-sm" />
+          <input id="repair-content" type="text" required placeholder="修復内容を入力..." class="sm:col-span-7 px-2 py-1.5 border border-slate-300 rounded text-sm" />
+          <button id="btn-add-repair" type="submit" class="sm:col-span-2 px-2 py-1.5 bg-amber-600 text-white rounded text-sm hover:bg-amber-700 flex items-center justify-center gap-1"><i data-lucide="plus" class="w-3.5 h-3.5"></i>追加</button>
+        </form>
+        <div class="space-y-1.5">${repairs.length===0?'<div class="text-slate-400 text-sm text-center py-3">修復履歴はありません</div>':repairs.map(r=>`<div class="flex items-start gap-2 p-2 bg-white border border-slate-200 rounded text-sm"><span class="text-xs text-slate-500 font-mono flex-shrink-0 mt-0.5">${escapeHtml(r.date)}</span><span class="flex-1">${escapeHtml(r.content)}</span><button data-del-repair="${r.id}" class="text-red-600 hover:bg-red-50 rounded p-0.5"><i data-lucide="x" class="w-3.5 h-3.5"></i></button></div>`).join("")}</div>
+      </div>
+      <div class="flex gap-2 justify-end pt-2 border-t border-slate-200">
+        <button id="btn-edit-equipment" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center gap-1.5"><i data-lucide="edit-3" class="w-4 h-4"></i>編集</button>
+      </div>`;
+    lucide.createIcons();
+    document.getElementById("repair-date").value = dayjs().format("YYYY-MM-DD");
+    document.getElementById("form-repair").addEventListener("submit", async e=>{
+      e.preventDefault();
+      const date=document.getElementById("repair-date").value;
+      const content=document.getElementById("repair-content").value.trim();
+      if(!date||!content) return;
+      const tempId="tmp_"+uid();
+      const newRepair = {id:tempId, equipmentId:eq.id, date, content};
+      try {
+        await optimistic({
+          apply:()=>{ state.repairs.push(newRepair); },
+          revert:()=>{ state.repairs = state.repairs.filter(r=>r.id!==tempId); },
+          action:"addRepair", payload:{equipmentId:eq.id,date,content},
+          rerender:renderEquipmentModal, busyButtonId:"btn-add-repair", successMsg:"修復履歴を追加しました"
+        });
+      } catch(err){}
+    });
+    body.querySelectorAll("[data-del-repair]").forEach(btn=>btn.addEventListener("click", async()=>{
+      if(!confirm("この修復履歴を削除しますか?")) return;
+      const id=btn.dataset.delRepair;
+      const removed = state.repairs.find(r=>r.id===id);
+      await optimistic({
+        apply:()=>{ state.repairs=state.repairs.filter(r=>r.id!==id); },
+        revert:()=>{ if(removed) state.repairs.push(removed); },
+        action:"deleteRepair", payload:{id}, rerender:renderEquipmentModal, successMsg:"削除しました"
+      }).catch(()=>{});
+    }));
+    document.getElementById("btn-edit-equipment").addEventListener("click",()=>{ modalEditMode=true; renderEquipmentModal(); });
+  }
+}
+
+/* =========================================================
+   予約登録 / プリセット適用
+   ========================================================= */
+const rvStart=document.getElementById("rv-start");
+const rvEnd=document.getElementById("rv-end");
+const showUnavailableCheck=document.getElementById("show-unavailable");
+
+rvStart.addEventListener("change",()=>{
+  if(rvStart.value&&!rvEnd.value) rvEnd.value=rvStart.value;
+  if(rvStart.value&&rvEnd.value&&rvStart.value>rvEnd.value) rvEnd.value=rvStart.value;
+  renderEquipmentChecklist();
+});
+rvEnd.addEventListener("change", renderEquipmentChecklist);
+showUnavailableCheck.addEventListener("change",()=>{ showUnavailable=showUnavailableCheck.checked; renderEquipmentChecklist(); });
+document.getElementById("eq-search").addEventListener("input", renderEquipmentChecklist);
+document.getElementById("btn-clear-equipment").addEventListener("click",()=>{ selectedEquipmentIds.clear(); renderEquipmentChecklist(); updateSelectedCount(); });
+document.getElementById("rv-expand-all").addEventListener("click",  ()=>{ state.categories.forEach(c=>setCollapsed("reservations",c.name,false)); renderEquipmentChecklist(); });
+document.getElementById("rv-collapse-all").addEventListener("click", ()=>{ state.categories.forEach(c=>setCollapsed("reservations",c.name,true));  renderEquipmentChecklist(); });
+
+// プリセット表示・クリア
+document.getElementById("preset-clear").addEventListener("click",()=>{
+  reservationPreset = null;
+  selectedEquipmentIds.clear();
+  document.getElementById("rv-start").value = "";
+  document.getElementById("rv-end").value = "";
+  document.getElementById("preset-indicator").classList.add("hidden");
+  renderEquipmentChecklist();
+  updateSelectedCount();
+});
+
+function applyPresetIfAny() {
+  if (!reservationPreset) {
+    document.getElementById("preset-indicator").classList.add("hidden");
+    return;
+  }
+  // 既にフォームに値があるなら触らない
+  if (reservationPreset.start && !rvStart.value) rvStart.value = reservationPreset.start;
+  if (reservationPreset.end && !rvEnd.value)     rvEnd.value   = reservationPreset.end;
+  if (reservationPreset.equipmentId) {
+    selectedEquipmentIds.add(reservationPreset.equipmentId);
+    updateSelectedCount();
+  }
+  // インジケーター表示
+  const eq = state.equipment.find(e=>e.id===reservationPreset.equipmentId);
+  const ind = document.getElementById("preset-indicator");
+  const msg = document.getElementById("preset-message");
+  if (eq) {
+    msg.innerHTML = `カレンダーから選択: <strong>${escapeHtml(eq.name)}</strong> / ${escapeHtml(reservationPreset.start)}`;
+    ind.classList.remove("hidden");
+    lucide.createIcons();
+  }
+}
+
+function getEquipmentAvailability(id, start, end) {
+  if(!start||!end) return {available:true};
+  const c=state.reservations.find(r=>r.equipmentId===id&&isOverlap(start,end,r.start,r.end));
+  return c ? {available:false, conflict:c} : {available:true};
+}
+
+function renderEquipmentChecklist() {
+  const wrapper=document.getElementById("equipment-checklist-wrapper");
+  const list=document.getElementById("equipment-checklist");
+  const search=(document.getElementById("eq-search").value||"").toLowerCase();
+  const start=rvStart.value, end=rvEnd.value;
+  const dateMissing=!start||!end;
+  wrapper.classList.toggle("lock-overlay", dateMissing);
+  if(state.equipment.length===0){ list.innerHTML=`<div class="text-center py-4 text-slate-400 text-xs">機材がまだ登録されていません</div>`; return; }
+  const catOrder=state.categories.map(c=>c.name);
+  const grouped={};
+  state.equipment.forEach(eq=>{
+    if(search&&!eq.name.toLowerCase().includes(search)&&!eq.category.toLowerCase().includes(search)) return;
+    if(!dateMissing){ const a=getEquipmentAvailability(eq.id,start,end); if(!a.available&&!showUnavailable) return; }
+    if(!grouped[eq.category]) grouped[eq.category]=[];
+    grouped[eq.category].push(eq);
+  });
+  const cats=Object.keys(grouped).sort((a,b)=>{ const ai=catOrder.indexOf(a),bi=catOrder.indexOf(b); return(ai===-1?999:ai)-(bi===-1?999:bi); });
+  if(cats.length===0){ list.innerHTML=`<div class="text-center py-4 text-slate-400 text-xs">${search?"該当する機材がありません":"使用可能な機材がありません"}</div>`; return; }
+  let html="";
+  cats.forEach(cat=>{
+    const collapsed=search?false:getCollapsed("reservations",cat);
+    const hasSelected=grouped[cat].some(eq=>selectedEquipmentIds.has(eq.id));
+    const finalCollapsed=collapsed&&!hasSelected;
+    const selInCat=grouped[cat].filter(eq=>selectedEquipmentIds.has(eq.id)).length;
+    const avail=dateMissing?grouped[cat].length:grouped[cat].filter(eq=>getEquipmentAvailability(eq.id,start,end).available).length;
+    html+=`<div class="mb-2 ${finalCollapsed?"collapsed":""}">
+      <button type="button" class="cat-toggle-rv w-full text-left text-xs font-semibold text-slate-500 px-1 py-1 mb-1 flex items-center gap-1.5 hover:bg-white rounded" data-cat-toggle="${escapeHtml(cat)}">
+        <i data-lucide="chevron-down" class="w-3 h-3 collapse-toggle"></i>
+        <span>${escapeHtml(cat)}</span>
+        <span class="text-slate-400">(${avail}/${grouped[cat].length}件 利用可)</span>
+        ${selInCat>0?`<span class="ml-auto text-emerald-600 font-bold">✓${selInCat}</span>`:""}
+      </button>
+      <div class="space-y-0.5 ${finalCollapsed?"hidden":""}">`;
+    grouped[cat].forEach(eq=>{
+      const checked=selectedEquipmentIds.has(eq.id)?"checked":"";
+      const av=dateMissing?{available:true}:getEquipmentAvailability(eq.id,start,end);
+      const disabled=!av.available;
+      const conflictTxt=disabled&&av.conflict?`<span class="text-[10px] text-red-600 ml-auto flex-shrink-0 truncate max-w-[55%]" title="${escapeHtml(av.conflict.user)}: ${av.conflict.start}〜${av.conflict.end}">⚠️ ${escapeHtml(av.conflict.user)}が${av.conflict.start}〜${av.conflict.end}使用中</span>`:"";
+      html+=`<label class="flex items-center gap-2 px-2 py-1.5 bg-white hover:bg-indigo-50 rounded ${disabled?"equipment-disabled cursor-not-allowed":"cursor-pointer"}">
+        <input type="checkbox" class="eq-check w-4 h-4 accent-indigo-600" data-eq-id="${eq.id}" ${checked} ${disabled?"disabled":""}>
+        <span class="px-1.5 py-0.5 text-[10px] rounded border ${categoryColor(eq.category)}">${escapeHtml(eq.category)}</span>
+        <span class="text-sm truncate flex-shrink min-w-0">${escapeHtml(eq.name)}</span>
+        ${conflictTxt}
+      </label>`;
+    });
+    html+=`</div></div>`;
+  });
+  list.innerHTML=html; lucide.createIcons();
+  list.querySelectorAll("[data-cat-toggle]").forEach(btn=>btn.addEventListener("click",()=>{ const cat=btn.dataset.catToggle; setCollapsed("reservations",cat,!getCollapsed("reservations",cat)); renderEquipmentChecklist(); }));
+  list.querySelectorAll(".eq-check").forEach(cb=>cb.addEventListener("change",()=>{ const id=cb.dataset.eqId; if(cb.checked) selectedEquipmentIds.add(id); else selectedEquipmentIds.delete(id); updateSelectedCount(); }));
+}
+function updateSelectedCount(){ const el=document.getElementById("selected-count"); if(el) el.textContent=`${selectedEquipmentIds.size}件選択中`; }
+
+document.getElementById("form-reservation").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const equipmentIds=Array.from(selectedEquipmentIds);
+  const user=document.getElementById("rv-user").value.trim();
+  const start=rvStart.value, end=rvEnd.value;
+  const projectName=document.getElementById("rv-project").value.trim();
+  const memo=document.getElementById("rv-memo").value.trim();
+  if(!start||!end){ showToast("使用期間を入力してください","error"); return; }
+  if(start>end){ showToast("終了日は開始日以降にしてください","error"); return; }
+  if(!user){ showToast("担当者名を入力してください","error"); return; }
+  if(equipmentIds.length===0){ showToast("機材を1つ以上選択してください","error"); return; }
+  const conflicts=[];
+  equipmentIds.forEach(eid=>{ const c=state.reservations.find(r=>r.equipmentId===eid&&isOverlap(start,end,r.start,r.end)); if(c){ const eq=state.equipment.find(e=>e.id===eid); conflicts.push(`「${eq?eq.name:eid}」: ${c.start}〜${c.end} に ${c.user} さんが予約済み`); } });
+  if(conflicts.length>0){ showToast("重複予約が検出されました\n"+conflicts.join("\n"),"error"); return; }
+  const tempGroupId="g_tmp_"+uid(), createdAt=new Date().toISOString();
+  const temps=equipmentIds.map(eid=>({id:"tmp_"+uid(),equipmentId:eid,groupId:tempGroupId,user,start,end,projectName,memo,createdAt}));
+  const tempIds = new Set(temps.map(t=>t.id));
+  try {
+    await optimistic({
+      apply:()=>{ state.reservations.push(...temps); },
+      revert:()=>{ state.reservations = state.reservations.filter(r=>!tempIds.has(r.id)); },
+      action:"addReservationGroup", payload:{equipmentIds,user,start,end,projectName,memo},
+      rerender:()=>{ renderEquipmentChecklist(); renderReservationList(); },
+      busyButtonId:"btn-add-reservation", successMsg:`${equipmentIds.length}機材の予約を登録しました`
+    });
+    document.getElementById("form-reservation").reset();
+    selectedEquipmentIds.clear(); updateSelectedCount();
+    reservationPreset = null;
+    document.getElementById("preset-indicator").classList.add("hidden");
+    renderEquipmentChecklist(); renderReservationList();
+  } catch(err){}
+});
+
+function renderReservationList(){
+  const list=document.getElementById("reservation-list");
+  if(state.reservations.length===0){ list.innerHTML=`<div class="text-center py-8 text-slate-400 text-sm"><i data-lucide="calendar-x" class="w-8 h-8 mx-auto mb-2"></i>予約がまだ登録されていません</div>`; lucide.createIcons(); return; }
+  const groups={};
+  state.reservations.forEach(r=>{ const k=r.groupId||("solo_"+r.id); if(!groups[k]) groups[k]=[]; groups[k].push(r); });
+  const sorted=Object.entries(groups).map(([k,items])=>{ items.sort((a,b)=>String(a.equipmentId).localeCompare(String(b.equipmentId))); return{k,items}; }).sort((a,b)=>String(b.items[0].start).localeCompare(String(a.items[0].start)));
+  const today=dayjs().format("YYYY-MM-DD");
+  let html="";
+  sorted.forEach(({k,items})=>{
+    const f=items[0], isPast=f.end<today, isOngoing=f.start<=today&&today<=f.end;
+    const badge=isOngoing?`<span class="px-2 py-0.5 text-xs rounded bg-indigo-100 text-indigo-700">使用中</span>`:isPast?`<span class="px-2 py-0.5 text-xs rounded bg-slate-100 text-slate-500">終了</span>`:`<span class="px-2 py-0.5 text-xs rounded bg-emerald-100 text-emerald-700">予定</span>`;
+    const isSolo = k.startsWith("solo_");
+    html+=`<div class="p-3 bg-slate-50 border border-slate-200 rounded-lg ${isPast?"opacity-60":""}">
+      <div class="flex items-start gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 flex-wrap mb-1.5">
+            ${badge}
+            ${items.length>1?`<span class="px-2 py-0.5 text-xs rounded bg-purple-100 text-purple-700">セット予約 (${items.length}機材)</span>`:""}
+            <span class="text-xs text-slate-600 flex items-center gap-1"><i data-lucide="calendar" class="w-3 h-3"></i>${f.start} 〜 ${f.end}</span>
+            <span class="text-xs text-slate-600 flex items-center gap-1"><i data-lucide="user" class="w-3 h-3"></i>${escapeHtml(f.user)}</span>
+            ${f.projectName?`<span class="text-xs text-indigo-700 flex items-center gap-1 font-semibold"><i data-lucide="briefcase" class="w-3 h-3"></i>${escapeHtml(f.projectName)}</span>`:""}
+            ${f.memo?`<span class="text-xs text-slate-600 flex items-center gap-1"><i data-lucide="message-square" class="w-3 h-3"></i>${escapeHtml(f.memo)}</span>`:""}
+          </div>
+          <div class="flex flex-wrap gap-1.5 mt-1">${items.map(r=>{ const eq=state.equipment.find(e=>e.id===r.equipmentId); return eq?`<span class="px-2 py-0.5 text-xs rounded border ${categoryColor(eq.category)}">${escapeHtml(eq.name)}</span>`:`<span class="text-xs text-red-500">(機材削除済み)</span>`; }).join("")}</div>
+        </div>
+        <div class="flex flex-col gap-1 flex-shrink-0">
+          ${!isSolo?`<button data-edit-group="${k}" class="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded" title="編集"><i data-lucide="edit-3" class="w-4 h-4"></i></button>`:""}
+          <button data-del-group="${k}" data-is-group="${items.length>1}" class="p-1.5 text-red-600 hover:bg-red-50 rounded" title="削除"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+        </div>
+      </div>
+    </div>`;
+  });
+  list.innerHTML=html; lucide.createIcons();
+
+  // 編集ボタン
+  list.querySelectorAll("[data-edit-group]").forEach(btn=>btn.addEventListener("click",()=>{
+    const k=btn.dataset.editGroup;
+    openReservationEditModal(k);
+  }));
+
+  list.querySelectorAll("[data-del-group]").forEach(btn=>btn.addEventListener("click", async()=>{
+    const k=btn.dataset.delGroup, isGrp=btn.dataset.isGroup==="true";
+    const target=sorted.find(g=>g.k===k); if(!target) return;
+    if(!confirm(isGrp?`このセット予約(${target.items.length}機材)をすべて削除しますか?`:"この予約を削除しますか?")) return;
+    const isSolo=k.startsWith("solo_");
+    const removed = target.items.slice();
+    await optimistic({
+      apply:()=>{ if(isSolo){ state.reservations=state.reservations.filter(r=>r.id!==target.items[0].id); } else { state.reservations=state.reservations.filter(r=>r.groupId!==k); } },
+      revert:()=>{ state.reservations.push(...removed); },
+      action:isSolo?"deleteReservation":"deleteReservationGroup",
+      payload:isSolo?{id:target.items[0].id}:{groupId:k},
+      rerender:renderReservationList, successMsg:"予約を削除しました"
+    }).catch(()=>{});
+  }));
+}
+
+/* =========================================================
+   予約編集モーダル(機能A)
+   ========================================================= */
+function openReservationEditModal(groupId) {
+  editingReservationGroupId = groupId;
+  renderReservationEditModal();
+  document.getElementById("reservation-edit-modal").classList.remove("hidden");
+}
+function closeReservationEditModal() {
+  editingReservationGroupId = null;
+  document.getElementById("reservation-edit-modal").classList.add("hidden");
+}
+document.getElementById("re-modal-close").addEventListener("click", closeReservationEditModal);
+document.getElementById("reservation-edit-modal").addEventListener("click", e=>{ if(e.target.id==="reservation-edit-modal") closeReservationEditModal(); });
+
+function renderReservationEditModal() {
+  const items = state.reservations.filter(r=>r.groupId===editingReservationGroupId);
+  if(items.length===0){ closeReservationEditModal(); return; }
+  const f = items[0];
+  const body = document.getElementById("re-modal-body");
+
+  body.innerHTML = `
+    <div class="space-y-3">
+      <div class="bg-slate-50 border border-slate-200 rounded-lg p-3">
+        <div class="text-xs text-slate-500 mb-1.5">機材(変更不可・新規予約してください)</div>
+        <div class="flex flex-wrap gap-1.5">
+          ${items.map(r=>{ const eq=state.equipment.find(e=>e.id===r.equipmentId); return eq?`<span class="px-2 py-0.5 text-xs rounded border ${categoryColor(eq.category)}">${escapeHtml(eq.name)}</span>`:`<span class="text-xs text-red-500">(機材削除済み)</span>`; }).join("")}
+        </div>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-600">開始日 <span class="text-red-500">*</span></label>
+          <input id="re-start" type="date" value="${escapeHtml(f.start)}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-600">終了日 <span class="text-red-500">*</span></label>
+          <input id="re-end" type="date" value="${escapeHtml(f.end)}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+        </div>
+        <div class="sm:col-span-2">
+          <label class="text-xs font-semibold text-slate-600">担当者名 <span class="text-red-500">*</span></label>
+          <input id="re-user" type="text" value="${escapeHtml(f.user)}" list="members-list" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+        </div>
+        <div class="sm:col-span-2">
+          <label class="text-xs font-semibold text-slate-600">案件名(任意)</label>
+          <input id="re-project" type="text" value="${escapeHtml(f.projectName||"")}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+        </div>
+        <div class="sm:col-span-2">
+          <label class="text-xs font-semibold text-slate-600">メモ(任意)</label>
+          <input id="re-memo" type="text" value="${escapeHtml(f.memo||"")}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg text-sm" />
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end pt-2 border-t border-slate-200">
+        <button id="re-cancel" class="px-4 py-2 border border-slate-300 rounded-lg text-sm hover:bg-slate-50">キャンセル</button>
+        <button id="btn-save-reservation" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 flex items-center gap-1.5">
+          <i data-lucide="save" class="w-4 h-4"></i><span>保存</span>
+        </button>
+      </div>
+    </div>`;
+  lucide.createIcons();
+
+  document.getElementById("re-cancel").addEventListener("click", closeReservationEditModal);
+  document.getElementById("btn-save-reservation").addEventListener("click", async ()=>{
+    const newStart = document.getElementById("re-start").value;
+    const newEnd   = document.getElementById("re-end").value;
+    const newUser  = document.getElementById("re-user").value.trim();
+    const newProj  = document.getElementById("re-project").value.trim();
+    const newMemo  = document.getElementById("re-memo").value.trim();
+    if(!newStart||!newEnd){ showToast("使用期間を入力してください","error"); return; }
+    if(newStart>newEnd){ showToast("終了日は開始日以降にしてください","error"); return; }
+    if(!newUser){ showToast("担当者名を入力してください","error"); return; }
+
+    // クライアント側で重複チェック(自分のグループは除く)
+    if(newStart!==f.start || newEnd!==f.end) {
+      const targetEqIds = items.map(r=>r.equipmentId);
+      const conflicts = [];
+      targetEqIds.forEach(eid=>{
+        const c = state.reservations.find(r=>r.equipmentId===eid && r.groupId!==editingReservationGroupId && isOverlap(newStart,newEnd,r.start,r.end));
+        if(c){ const eq=state.equipment.find(e=>e.id===eid); conflicts.push(`「${eq?eq.name:eid}」: ${c.start}〜${c.end} に ${c.user} さんが予約済み`); }
+      });
+      if(conflicts.length>0){ showToast("日付変更により重複が発生します\n"+conflicts.join("\n"),"error"); return; }
+    }
+
+    // 元の値を保存
+    const oldValues = items.map(r=>({id:r.id, user:r.user, start:r.start, end:r.end, projectName:r.projectName, memo:r.memo}));
+
+    try {
+      await optimistic({
+        apply:()=>{
+          items.forEach(r=>{
+            const t=state.reservations.find(x=>x.id===r.id);
+            if(t){ t.start=newStart; t.end=newEnd; t.user=newUser; t.projectName=newProj; t.memo=newMemo; }
+          });
+        },
+        revert:()=>{
+          oldValues.forEach(o=>{
+            const t=state.reservations.find(x=>x.id===o.id);
+            if(t){ t.start=o.start; t.end=o.end; t.user=o.user; t.projectName=o.projectName; t.memo=o.memo; }
+          });
+        },
+        action:"updateReservationGroup",
+        payload:{ groupId:editingReservationGroupId, user:newUser, start:newStart, end:newEnd, projectName:newProj, memo:newMemo },
+        rerender:()=>{ renderReservationList(); renderReservationEditModal(); },
+        busyButtonId:"btn-save-reservation",
+        successMsg:"予約を更新しました"
+      });
+      closeReservationEditModal();
+    } catch(err){}
+  });
+}
+
+/* =========================================================
+   カレンダー(セルクリックで予約フォーム遷移)
+   ========================================================= */
+let calMode="month", calCursor=dayjs();
+document.getElementById("cal-mode").addEventListener("change",  e=>{ calMode=e.target.value; renderCalendar(); });
+document.getElementById("cal-prev").addEventListener("click",   ()=>{ calCursor=calMode==="month"?calCursor.subtract(1,"month"):calCursor.subtract(1,"week"); renderCalendar(); });
+document.getElementById("cal-next").addEventListener("click",   ()=>{ calCursor=calMode==="month"?calCursor.add(1,"month"):calCursor.add(1,"week"); renderCalendar(); });
+document.getElementById("cal-today").addEventListener("click",  ()=>{ calCursor=dayjs(); renderCalendar(); });
+document.getElementById("cal-expand-all").addEventListener("click",   ()=>{ state.categories.forEach(c=>setCollapsed("calendar",c.name,false)); renderCalendar(); });
+document.getElementById("cal-collapse-all").addEventListener("click",  ()=>{ state.categories.forEach(c=>setCollapsed("calendar",c.name,true));  renderCalendar(); });
+
+function renderCalendar(){
+  const area=document.getElementById("calendar-area"), label=document.getElementById("cal-label");
+  if(state.equipment.length===0){ area.innerHTML=`<div class="text-center py-12 text-slate-400 text-sm"><i data-lucide="package-x" class="w-10 h-10 mx-auto mb-2"></i>まず「機材管理」から機材を登録してください</div>`; label.textContent="-"; lucide.createIcons(); return; }
+  let days=[];
+  if(calMode==="month"){ const s=calCursor.startOf("month"),e=calCursor.endOf("month"); label.textContent=calCursor.format("YYYY年 M月"); for(let d=s;d.isBefore(e)||d.isSame(e,"day");d=d.add(1,"day")) days.push(d); }
+  else { const dow=calCursor.day(), s=calCursor.add(dow===0?-6:1-dow,"day"); label.textContent=s.format("YYYY/M/D")+" 週"; for(let i=0;i<7;i++) days.push(s.add(i,"day")); }
+  const today=dayjs().format("YYYY-MM-DD"), dw=calMode==="month"?"w-7":"w-16", ch="h-8", cols=days.length;
+  const catOrder=state.categories.map(c=>c.name);
+  const groups={}; state.equipment.forEach(eq=>{ if(!groups[eq.category]) groups[eq.category]=[]; groups[eq.category].push(eq); });
+  const sortedCats=Object.keys(groups).sort((a,b)=>{ const ai=catOrder.indexOf(a),bi=catOrder.indexOf(b); return(ai===-1?999:ai)-(bi===-1?999:bi); });
+  let html=`<div class="inline-block min-w-full"><table class="border-separate border-spacing-0 text-xs"><thead><tr><th class="sticky left-0 bg-white z-10 border-b border-r border-slate-200 px-2 py-1 text-left font-semibold w-44 min-w-[176px]">機材 / カテゴリー</th>`;
+  days.forEach(d=>{ const isT=d.format("YYYY-MM-DD")===today, isW=d.day()===0||d.day()===6, bg=isT?"bg-indigo-50":isW?"bg-slate-50":"bg-white", lbl=calMode==="month"?d.format("D"):`${d.format("M/D")}<div class="text-[10px] text-slate-400">${["日","月","火","水","木","金","土"][d.day()]}</div>`; html+=`<th class="${bg} border-b border-r border-slate-200 ${dw} px-1 py-1 text-center font-medium ${isT?"text-indigo-700":""}">${lbl}</th>`; });
+  html+=`</tr></thead><tbody>`;
+  sortedCats.forEach(cat=>{
+    const collapsed=getCollapsed("calendar",cat), eqs=groups[cat];
+    html+=`<tr><td class="sticky left-0 bg-slate-100 z-10 border-b border-r border-slate-200 px-1 py-1 w-44 min-w-[176px]"><button type="button" class="cat-toggle-cal w-full text-left flex items-center gap-1 text-xs font-semibold hover:bg-slate-200 rounded px-1 py-0.5" data-cat-toggle="${escapeHtml(cat)}"><i data-lucide="chevron-down" class="w-3 h-3 ${collapsed?"-rotate-90":""}" style="transition:transform 0.2s;"></i><span class="px-1.5 py-0.5 text-[10px] rounded border ${categoryColor(cat)}">${escapeHtml(cat)}</span><span class="text-slate-500">${eqs.length}件</span></button></td>`;
+    if(collapsed){
+      days.forEach(d=>{ const ds=d.format("YYYY-MM-DD"), rc=eqs.filter(eq=>state.reservations.some(r=>r.equipmentId===eq.id&&r.start<=ds&&ds<=r.end)).length, tot=eqs.length, isT=ds===today, isW=d.day()===0||d.day()===6, base=isT?"bg-indigo-50":isW?"bg-slate-50":"bg-white"; if(rc>0){ html+=`<td class="border-b border-r border-slate-200 ${ch} p-0"><div class="w-full h-full ${categoryBandColor(cat)} flex items-center justify-center text-white text-[9px] font-bold" style="opacity:${Math.max(0.3,rc/tot)};" title="${rc}/${tot} 件予約あり">${rc}</div></td>`; } else { html+=`<td class="${base} border-b border-r border-slate-200 ${ch}"></td>`; } });
+    } else { html+=`<td class="bg-slate-50 border-b border-r border-slate-200 ${ch}" colspan="${cols}"></td>`; }
+    html+=`</tr>`;
+    if(!collapsed){
+      eqs.forEach(eq=>{
+        html+=`<tr><td class="sticky left-0 bg-white z-10 border-b border-r border-slate-200 px-2 py-1 pl-6 w-44 min-w-[176px]"><div class="truncate text-xs">${escapeHtml(eq.name)}</div></td>`;
+        days.forEach(d=>{ const ds=d.format("YYYY-MM-DD"), isT=ds===today, rv=state.reservations.find(r=>r.equipmentId===eq.id&&r.start<=ds&&ds<=r.end), base=isT?"bg-indigo-50":(d.day()===0||d.day()===6)?"bg-slate-50":"bg-white";
+          if(rv){
+            const tp=[rv.user,`${rv.start} 〜 ${rv.end}`]; if(rv.projectName) tp.push(`案件: ${rv.projectName}`); if(rv.memo) tp.push(rv.memo);
+            html+=`<td class="border-b border-r border-slate-200 ${ch} p-0"><div class="w-full h-full bg-indigo-500 hover:bg-indigo-600 cursor-help flex items-center justify-center text-white text-[10px]" title="${escapeHtml(tp.join("\n"))}">${calMode==="week"?escapeHtml(String(rv.user).slice(0,4)):""}</div></td>`;
+          } else {
+            // ⭐ クリック可能な空きセル(過去日は除外)
+            const isPast = ds < today;
+            const cls = isPast ? base : `${base} cal-empty-cell`;
+            const clickAttr = isPast ? "" : `data-cal-cell-eq="${eq.id}" data-cal-cell-date="${ds}"`;
+            html+=`<td class="${cls} border-b border-r border-slate-200 ${ch}" ${clickAttr} title="${isPast?"":`クリックで「${eq.name.replace(/"/g,"&quot;")}」の${ds}に予約`}"></td>`;
+          }
+        });
+        html+=`</tr>`;
+      });
+    }
+  });
+  html+=`</tbody></table></div>`;
+  area.innerHTML=html; lucide.createIcons();
+
+  area.querySelectorAll("[data-cat-toggle]").forEach(btn=>btn.addEventListener("click",()=>{ const cat=btn.dataset.catToggle; setCollapsed("calendar",cat,!getCollapsed("calendar",cat)); renderCalendar(); }));
+
+  // ⭐ セルクリックで予約タブへ遷移 (機能E)
+  area.querySelectorAll("[data-cal-cell-eq]").forEach(td=>td.addEventListener("click",()=>{
+    const eqId = td.dataset.calCellEq;
+    const date = td.dataset.calCellDate;
+    reservationPreset = { equipmentId: eqId, start: date, end: date };
+    // 既存のフォームを念のためリセット(既選択がない場合)
+    if (!rvStart.value && !rvEnd.value && selectedEquipmentIds.size===0) {
+      // 何もしない、applyPresetIfAny で適用される
+    }
+    switchTab("reservations");
+  }));
+}
+
+/* =========================================================
+   カテゴリー管理
+   ========================================================= */
+document.getElementById("form-category").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const name=document.getElementById("cat-name").value.trim();
+  if(!name) return;
+  if(state.categories.find(c=>c.name===name)){ showToast("同名のカテゴリーが既に存在します","error"); return; }
+  const tempId="tmp_c_"+uid(), maxOrder=state.categories.reduce((m,c)=>Math.max(m,Number(c.order)||0),0);
+  const newCat = {id:tempId, name, order:maxOrder+1};
+  try {
+    await optimistic({
+      apply:()=>{ state.categories.push(newCat); },
+      revert:()=>{ state.categories = state.categories.filter(c=>c.id!==tempId); },
+      action:"addCategory", payload:{name},
+      rerender:()=>{ renderCategoryList(); refreshCategoryDropdowns(); },
+      successMsg:"カテゴリーを追加しました"
+    });
+    document.getElementById("cat-name").value="";
+  } catch(err){}
+});
+
+let categorySortable=null;
+function renderCategoryList(){
+  const list=document.getElementById("category-list");
+  if(categorySortable){ try{categorySortable.destroy();}catch(e){} }
+  if(state.categories.length===0){ list.innerHTML=`<div class="text-center py-8 text-slate-400 text-sm">カテゴリーがありません</div>`; return; }
+  let html=`<div id="cat-sortable" class="space-y-1.5">`;
+  state.categories.forEach(c=>{ const uc=state.equipment.filter(e=>e.category===c.name).length; html+=`<div class="flex items-center gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg" data-cat-id="${c.id}"><span class="drag-handle text-slate-400 hover:text-slate-600 select-none"><i data-lucide="grip-vertical" class="w-4 h-4 pointer-events-none"></i></span><span class="px-2 py-0.5 text-xs rounded border ${categoryColor(c.name)}">${escapeHtml(c.name)}</span><span class="text-xs text-slate-500 flex-1">使用中の機材: ${uc} 件</span><button data-del-cat="${c.id}" data-cat-name="${escapeHtml(c.name)}" data-using="${uc}" class="p-1.5 text-red-600 hover:bg-red-50 rounded ${uc>0?"opacity-30 cursor-not-allowed":""}"><i data-lucide="trash-2" class="w-4 h-4"></i></button></div>`; });
+  html+=`</div>`; list.innerHTML=html; lucide.createIcons();
+  list.querySelectorAll("[data-del-cat]").forEach(btn=>btn.addEventListener("click", async()=>{
+    const uc=parseInt(btn.dataset.using), id=btn.dataset.delCat, name=btn.dataset.catName;
+    if(uc>0){ showToast(`「${name}」は機材で使用中のため削除できません`,"error"); return; }
+    if(!confirm(`カテゴリー「${name}」を削除しますか?`)) return;
+    const removed = state.categories.find(c=>c.id===id);
+    await optimistic({
+      apply:()=>{ state.categories=state.categories.filter(c=>c.id!==id); },
+      revert:()=>{ if(removed) state.categories.push(removed); },
+      action:"deleteCategory", payload:{id},
+      rerender:()=>{ renderCategoryList(); refreshCategoryDropdowns(); },
+      successMsg:"削除しました"
+    }).catch(()=>{});
+  }));
+  const el=document.getElementById("cat-sortable");
+  categorySortable=Sortable.create(el,{
+    handle:".drag-handle", animation:150,
+    onEnd: async()=>{
+      const orderedIds=Array.from(el.querySelectorAll("[data-cat-id]")).map(e=>e.dataset.catId);
+      const oldOrders={}; state.categories.forEach(c=>{ oldOrders[c.id]=c.order; });
+      const idToOrder={}; orderedIds.forEach((id,i)=>{ idToOrder[id]=i+1; });
+      state.categories.forEach(c=>{ if(idToOrder[c.id]!=null) c.order=idToOrder[c.id]; });
+      state.categories.sort((a,b)=>a.order-b.order);
+      setStatus("loading","バックグラウンドで保存中...");
+      try {
+        await apiPost("reorderCategories",{orderedIds});
+        setStatus("ok",`保存完了 (${new Date().toLocaleTimeString()})`);
+        renderCategoryList(); refreshCategoryDropdowns();
+      } catch(err) {
+        state.categories.forEach(c=>{ if(oldOrders[c.id]!=null) c.order=oldOrders[c.id]; });
+        state.categories.sort((a,b)=>a.order-b.order);
+        renderCategoryList();
+        setStatus("error","保存に失敗しました — 変更を元に戻しました");
+        showToast("エラー: "+err.message+"\n変更を元に戻しました","error");
+      }
+    }
+  });
+}
+
+/* =========================================================
+   担当者マスタ管理(機能B)
+   ========================================================= */
+document.getElementById("form-member").addEventListener("submit", async e=>{
+  e.preventDefault();
+  const name=document.getElementById("member-name").value.trim();
+  if(!name) return;
+  if(state.members.find(m=>m.name===name)){ showToast("同名の担当者が既に存在します","error"); return; }
+  const tempId="tmp_m_"+uid(), maxOrder=state.members.reduce((m,x)=>Math.max(m,Number(x.order)||0),0);
+  const newMember = {id:tempId, name, order:maxOrder+1};
+  try {
+    await optimistic({
+      apply:()=>{ state.members.push(newMember); },
+      revert:()=>{ state.members = state.members.filter(m=>m.id!==tempId); },
+      action:"addMember", payload:{name},
+      rerender:()=>{ renderMemberList(); refreshMemberDatalist(); },
+      successMsg:"担当者を追加しました"
+    });
+    document.getElementById("member-name").value="";
+  } catch(err){}
+});
+
+let memberSortable=null;
+function renderMemberList(){
+  const list=document.getElementById("member-list");
+  if(memberSortable){ try{memberSortable.destroy();}catch(e){} }
+  if(state.members.length===0){ list.innerHTML=`<div class="text-center py-8 text-slate-400 text-sm">担当者がまだ登録されていません</div>`; return; }
+  let html=`<div id="member-sortable" class="space-y-1.5">`;
+  state.members.forEach(m=>{
+    const usageCount = state.reservations.filter(r=>r.user===m.name).length;
+    html+=`<div class="flex items-center gap-2 p-2.5 bg-slate-50 border border-slate-200 rounded-lg" data-member-id="${m.id}">
+      <span class="drag-handle text-slate-400 hover:text-slate-600 select-none"><i data-lucide="grip-vertical" class="w-4 h-4 pointer-events-none"></i></span>
+      <i data-lucide="user" class="w-4 h-4 text-slate-500"></i>
+      <span class="font-medium text-sm flex-1">${escapeHtml(m.name)}</span>
+      <span class="text-xs text-slate-500">予約 ${usageCount} 件</span>
+      <button data-del-member="${m.id}" data-name="${escapeHtml(m.name)}" class="p-1.5 text-red-600 hover:bg-red-50 rounded"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+    </div>`;
+  });
+  html+=`</div>`; list.innerHTML=html; lucide.createIcons();
+
+  list.querySelectorAll("[data-del-member]").forEach(btn=>btn.addEventListener("click", async()=>{
+    const id=btn.dataset.delMember, name=btn.dataset.name;
+    if(!confirm(`担当者「${name}」をマスタから削除しますか?\n(過去の予約データは残ります)`)) return;
+    const removed = state.members.find(m=>m.id===id);
+    await optimistic({
+      apply:()=>{ state.members=state.members.filter(m=>m.id!==id); },
+      revert:()=>{ if(removed) state.members.push(removed); },
+      action:"deleteMember", payload:{id},
+      rerender:()=>{ renderMemberList(); refreshMemberDatalist(); },
+      successMsg:"削除しました"
+    }).catch(()=>{});
+  }));
+
+  const el=document.getElementById("member-sortable");
+  memberSortable=Sortable.create(el,{
+    handle:".drag-handle", animation:150,
+    onEnd: async()=>{
+      const orderedIds=Array.from(el.querySelectorAll("[data-member-id]")).map(e=>e.dataset.memberId);
+      const oldOrders={}; state.members.forEach(m=>{ oldOrders[m.id]=m.order; });
+      const idToOrder={}; orderedIds.forEach((id,i)=>{ idToOrder[id]=i+1; });
+      state.members.forEach(m=>{ if(idToOrder[m.id]!=null) m.order=idToOrder[m.id]; });
+      state.members.sort((a,b)=>a.order-b.order);
+      setStatus("loading","バックグラウンドで保存中...");
+      try {
+        await apiPost("reorderMembers",{orderedIds});
+        setStatus("ok",`保存完了 (${new Date().toLocaleTimeString()})`);
+        renderMemberList(); refreshMemberDatalist();
+      } catch(err) {
+        state.members.forEach(m=>{ if(oldOrders[m.id]!=null) m.order=oldOrders[m.id]; });
+        state.members.sort((a,b)=>a.order-b.order);
+        renderMemberList();
+        setStatus("error","保存に失敗しました — 変更を元に戻しました");
+        showToast("エラー: "+err.message+"\n変更を元に戻しました","error");
+      }
+    }
+  });
+}
+
+/* =========================================================
+   ダッシュボード(タイムライン)
+   ========================================================= */
+function renderDashboard(){
+  document.getElementById("stat-equipment").textContent=state.equipment.length;
+  const gs=new Set(); state.reservations.forEach(r=>gs.add(r.groupId||r.id));
+  document.getElementById("stat-reservations").textContent=gs.size;
+  const today=dayjs().format("YYYY-MM-DD");
+  const wS=dayjs().startOf("week").format("YYYY-MM-DD"), wE=dayjs().endOf("week").format("YYYY-MM-DD");
+  document.getElementById("stat-today").textContent=state.reservations.filter(r=>r.start<=today&&today<=r.end).length;
+  const wg=new Set(); state.reservations.forEach(r=>{ if(isOverlap(wS,wE,r.start,r.end)) wg.add(r.groupId||r.id); });
+  document.getElementById("stat-week").textContent=wg.size;
+
+  const groupMap={};
+  state.reservations.forEach(r=>{
+    const k=r.groupId||("solo_"+r.id);
+    if(!groupMap[k]) groupMap[k]={key:k, items:[], start:r.start, end:r.end, user:r.user, projectName:r.projectName||"", memo:r.memo||""};
+    groupMap[k].items.push(r);
+  });
+  const upcoming=Object.values(groupMap).filter(g=>g.end>=today).sort((a,b)=>a.start.localeCompare(b.start));
+  const el=document.getElementById("recent-list");
+  if(upcoming.length===0){ el.innerHTML=`<div class="text-slate-400 text-sm text-center py-4">直近の予約はありません</div>`; return; }
+  const todayD=dayjs();
+  function blockOf(g){
+    const ongoing=g.start<=today&&today<=g.end;
+    if(ongoing) return "now";
+    const diff=dayjs(g.start).diff(todayD,"day");
+    if(diff<=2) return "soon"; if(diff<=6) return "week"; if(diff<=13) return "next"; return "later";
+  }
+  const BLOCKS=[
+    { key:"now",   label:"🔴 使用中", border:"border-red-400", bg:"bg-red-50" },
+    { key:"soon",  label:"🟠 直近(2日以内)", border:"border-orange-300", bg:"bg-orange-50" },
+    { key:"week",  label:"🟡 今週", border:"border-amber-300", bg:"bg-amber-50" },
+    { key:"next",  label:"🟢 来週", border:"border-emerald-300", bg:"bg-emerald-50" },
+    { key:"later", label:"⚪ それ以降", border:"border-slate-300", bg:"bg-slate-50" },
+  ];
+  const grouped={}; upcoming.forEach(g=>{ const b=blockOf(g); if(!grouped[b]) grouped[b]=[]; grouped[b].push(g); });
+  let html="";
+  BLOCKS.forEach(block=>{
+    const gs=grouped[block.key]; if(!gs||gs.length===0) return;
+    html+=`<div class="mb-4"><div class="flex items-center gap-2 mb-2"><div class="border-l-4 ${block.border} h-4"></div><span class="text-xs font-bold text-slate-600">${block.label}</span><span class="text-xs text-slate-400">(${gs.length}件)</span></div><div class="space-y-2 pl-4">`;
+    gs.forEach(g=>{
+      const eqByCategory={};
+      g.items.forEach(r=>{ const eq=state.equipment.find(e=>e.id===r.equipmentId); if(!eq) return; if(!eqByCategory[eq.category]) eqByCategory[eq.category]=[]; eqByCategory[eq.category].push(eq); });
+      const catOrder=state.categories.map(c=>c.name);
+      const sortedCats=Object.keys(eqByCategory).sort((a,b)=>{ const ai=catOrder.indexOf(a),bi=catOrder.indexOf(b); return(ai===-1?999:ai)-(bi===-1?999:bi); });
+      const ongoing=g.start<=today&&today<=g.end;
+      const days=dayjs(g.end).diff(dayjs(g.start),"day")+1;
+      const dateStr=g.start===g.end?`${g.start.slice(5).replace("-","/")}(${["日","月","火","水","木","金","土"][dayjs(g.start).day()]})`:`${g.start.slice(5).replace("-","/")} 〜 ${g.end.slice(5).replace("-","/")} (${days}日)`;
+      html+=`<div class="border ${block.border} ${block.bg} rounded-lg p-3 ${ongoing?"ring-1 ring-red-300":""}">
+        <div class="flex items-start justify-between flex-wrap gap-x-3 gap-y-1 mb-2">
+          <div class="flex items-center gap-2 flex-wrap text-sm">
+            <span class="font-mono text-slate-700 font-semibold">${dateStr}</span>
+            <span class="text-slate-600 flex items-center gap-1"><i data-lucide="user" class="w-3 h-3"></i>${escapeHtml(g.user)}</span>
+            ${g.projectName?`<span class="text-indigo-700 font-bold flex items-center gap-1"><i data-lucide="briefcase" class="w-3 h-3"></i>${escapeHtml(g.projectName)}</span>`:""}
+          </div>
+          ${g.memo?`<span class="text-xs text-slate-500 flex items-center gap-1"><i data-lucide="message-square" class="w-3 h-3"></i>${escapeHtml(g.memo)}</span>`:""}
+        </div>
+        <div class="flex flex-wrap gap-x-3 gap-y-1">
+          ${sortedCats.map(cat=>`<div class="flex items-center gap-1 flex-wrap"><span class="px-1.5 py-0.5 text-[10px] rounded border ${categoryColor(cat)} flex-shrink-0">${escapeHtml(cat)}</span>${eqByCategory[cat].map(eq=>`<span class="text-xs text-slate-700">${escapeHtml(eq.name)}</span>`).join('<span class="text-slate-400 text-xs">·</span>')}</div>`).join('<span class="text-slate-300 text-xs mx-0.5">|</span>')}
+        </div>
+      </div>`;
+    });
+    html+=`</div></div>`;
+  });
+  el.innerHTML=html; lucide.createIcons();
+}
+
+/* =========================================================
+   印刷機能(機能F)
+   ========================================================= */
+const printModal = document.getElementById("print-modal");
+const printStartInput = document.getElementById("print-start");
+const printEndInput = document.getElementById("print-end");
+
+document.getElementById("btn-print-list").addEventListener("click",()=>{
+  // デフォルトで今日にセット
+  const today = dayjs().format("YYYY-MM-DD");
+  printStartInput.value = today;
+  printEndInput.value = today;
+  printModal.classList.remove("hidden");
+});
+document.getElementById("print-modal-close").addEventListener("click",()=>printModal.classList.add("hidden"));
+document.getElementById("print-cancel").addEventListener("click",()=>printModal.classList.add("hidden"));
+
+document.querySelectorAll("[data-print-preset]").forEach(btn=>btn.addEventListener("click",()=>{
+  const preset = btn.dataset.printPreset;
+  const today = dayjs();
+  if (preset==="today")     { printStartInput.value=today.format("YYYY-MM-DD"); printEndInput.value=today.format("YYYY-MM-DD"); }
+  if (preset==="tomorrow")  { const t=today.add(1,"day"); printStartInput.value=t.format("YYYY-MM-DD"); printEndInput.value=t.format("YYYY-MM-DD"); }
+  if (preset==="week")      { const m=today.startOf("week").add(1,"day"); const sun=m.add(6,"day"); printStartInput.value=m.format("YYYY-MM-DD"); printEndInput.value=sun.format("YYYY-MM-DD"); }
+  if (preset==="next-week") { const m=today.startOf("week").add(8,"day"); const sun=m.add(6,"day"); printStartInput.value=m.format("YYYY-MM-DD"); printEndInput.value=sun.format("YYYY-MM-DD"); }
+}));
+
+document.getElementById("print-execute").addEventListener("click",()=>{
+  const ps = printStartInput.value, pe = printEndInput.value;
+  if (!ps || !pe) { showToast("期間を入力してください","error"); return; }
+  if (ps>pe) { showToast("終了日は開始日以降にしてください","error"); return; }
+  buildPrintPage(ps, pe);
+  printModal.classList.add("hidden");
+  // 少し待ってから印刷ダイアログを開く
+  setTimeout(()=>window.print(), 300);
+});
+
+function buildPrintPage(periodStart, periodEnd) {
+  // 期間に該当する予約を抽出
+  const targets = state.reservations.filter(r=>isOverlap(periodStart, periodEnd, r.start, r.end));
+  // groupId でまとめる
+  const groups = {};
+  targets.forEach(r=>{
+    const k = r.groupId || ("solo_"+r.id);
+    if (!groups[k]) groups[k] = {key:k, items:[], user:r.user, start:r.start, end:r.end, projectName:r.projectName||"", memo:r.memo||""};
+    groups[k].items.push(r);
+  });
+  const sortedGroups = Object.values(groups).sort((a,b)=>{
+    if (a.start!==b.start) return a.start.localeCompare(b.start);
+    return String(a.user).localeCompare(String(b.user),"ja");
+  });
+
+  // カテゴリー順
+  const catOrder = state.categories.map(c=>c.name);
+
+  const rangeLabel = periodStart===periodEnd
+    ? `${dayjs(periodStart).format("YYYY年M月D日(ddd)")}`
+    : `${dayjs(periodStart).format("YYYY年M月D日")} 〜 ${dayjs(periodEnd).format("M月D日")}`;
+  const printedAt = dayjs().format("YYYY年M月D日 HH:mm");
+
+  let html = `<div class="print-page" style="font-family: 'Hiragino Sans', 'Noto Sans JP', sans-serif; color:#000;">
+    <div style="display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #000; padding-bottom:6px; margin-bottom:14px;">
+      <div>
+        <h1 style="font-size:18pt; font-weight:bold; margin:0;">機材持ち出しリスト</h1>
+        <div style="font-size:11pt; margin-top:3px;">${rangeLabel}</div>
+      </div>
+      <div style="font-size:9pt; color:#555;">出力日時: ${printedAt}</div>
+    </div>`;
+
+  if (sortedGroups.length === 0) {
+    html += `<div style="text-align:center; padding:30pt; color:#888; font-size:11pt;">該当期間に予約はありません</div>`;
+  } else {
+    html += `<table class="print-table" style="width:100%; border-collapse:collapse; font-size:10pt;">
+      <thead>
+        <tr>
+          <th style="width:14pt;">✓</th>
+          <th>期間</th>
+          <th>担当者</th>
+          <th>案件</th>
+          <th>機材(カテゴリー別)</th>
+          <th>メモ</th>
+        </tr>
+      </thead>
+      <tbody>`;
+    sortedGroups.forEach(g=>{
+      // カテゴリー別にまとめる
+      const eqByCategory = {};
+      g.items.forEach(r=>{
+        const eq = state.equipment.find(e=>e.id===r.equipmentId);
+        if (!eq) return;
+        if (!eqByCategory[eq.category]) eqByCategory[eq.category] = [];
+        eqByCategory[eq.category].push(eq);
+      });
+      const sortedCats = Object.keys(eqByCategory).sort((a,b)=>{ const ai=catOrder.indexOf(a),bi=catOrder.indexOf(b); return(ai===-1?999:ai)-(bi===-1?999:bi); });
+      const equipText = sortedCats.map(cat=>`<strong>[${escapeHtml(cat)}]</strong> ${eqByCategory[cat].map(eq=>escapeHtml(eq.name)).join(" / ")}`).join("<br>");
+      const periodText = g.start===g.end ? dayjs(g.start).format("M/D(ddd)") : `${dayjs(g.start).format("M/D")} 〜 ${dayjs(g.end).format("M/D")}`;
+      html += `<tr>
+        <td style="text-align:center;"><span class="checkbox-print"></span></td>
+        <td style="white-space:nowrap;">${periodText}</td>
+        <td style="white-space:nowrap;">${escapeHtml(g.user)}</td>
+        <td>${escapeHtml(g.projectName||"")}</td>
+        <td style="line-height:1.5;">${equipText}</td>
+        <td style="font-size:9pt;">${escapeHtml(g.memo||"")}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>
+      <div style="margin-top:14px; font-size:9pt; color:#555;">※ 持ち出し時に左端の □ にチェックしてください。</div>`;
+  }
+  html += `</div>`;
+
+  document.getElementById("print-page").innerHTML = html;
+  document.getElementById("print-page").classList.remove("hidden");
+}
+
+// 印刷後にprint-pageを隠す
+window.addEventListener("afterprint",()=>{
+  document.getElementById("print-page").classList.add("hidden");
+});
+
+/* =========================================================
+   設定
+   ========================================================= */
+function openSetupModal(u=""){ document.getElementById("setup-url-input").value=u; document.getElementById("setup-modal").classList.remove("hidden"); }
+function closeSetupModal(){ document.getElementById("setup-modal").classList.add("hidden"); }
+document.getElementById("setup-save").addEventListener("click", async()=>{
+  const url=document.getElementById("setup-url-input").value.trim();
+  if(!url){ showToast("URLを入力してください","error"); return; }
+  if(!/^https:\/\/script\.google\.com\/.+\/exec(\?.*)?$/.test(url)){ if(!confirm("URLの形式が一般的なものと違います。このまま保存しますか?")) return; }
+  setApiUrl(url); closeSetupModal(); await reloadAll(true);
+});
+document.getElementById("btn-change-url").addEventListener("click", ()=>openSetupModal(getApiUrl()));
+document.getElementById("btn-refresh").addEventListener("click", ()=>{ if(!isLoading) reloadAll(true); });
+
+/* =========================================================
+   起動
+   ========================================================= */
+window.addEventListener("DOMContentLoaded", ()=>{
+  lucide.createIcons();
+  const hash=(location.hash||"").replace("#","");
+  const valid=["dashboard","equipment","reservations","calendar","masters"];
+  switchTab(valid.includes(hash)?hash:"dashboard");
+  if(!getApiUrl()){ setStatus("idle","接続URLが未設定です"); openSetupModal(); }
+  else { reloadAll(true); }
+});
+</script>
+</body>
+</html>
