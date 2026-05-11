@@ -454,7 +454,7 @@
         </div>
         <input id="eq-search" type="text" placeholder="🔍 機材名で絞り込み..." />
         <div id="equipment-checklist-wrapper">
-          <div id="equipment-checklist" class="border border-zinc-200 rounded-xl max-h-72 overflow-y-auto p-2 space-y-1 bg-zinc-50"></div>
+          <div id="equipment-checklist" class="border border-zinc-200 rounded-xl max-h-[420px] overflow-y-auto p-2 space-y-1 bg-zinc-50"></div>
         </div>
         <div class="flex justify-end pt-1"><button id="btn-add-reservation" type="submit" class="btn-success"><i data-lucide="check" class="w-4 h-4"></i><span>予約を登録</span></button></div>
       </div>
@@ -1449,7 +1449,7 @@ function renderAddEquipmentModal() {
         <span id="ae-selected-count" class="text-emerald-600 font-bold ml-2 text-sm">${addingSelectedIds.size}件選択中</span>
       </div>
     </div>
-    <div class="border border-zinc-200 rounded-xl max-h-80 overflow-y-auto p-2 space-y-1 bg-zinc-50">${listHtml}</div>
+    <div class="border border-zinc-200 rounded-xl max-h-[420px] overflow-y-auto p-2 space-y-1 bg-zinc-50">${listHtml}</div>
     <div class="flex gap-2 justify-end pt-4 border-t border-zinc-200 mt-4">
       <button id="ae-cancel" class="btn-secondary">キャンセル</button>
       <button id="btn-save-add-eq" class="btn-success"><i data-lucide="plus" class="w-4 h-4"></i>機材を追加</button>
