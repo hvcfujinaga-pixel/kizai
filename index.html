@@ -5,10 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>機材管理・予約システム v7</title>
 
+
+<!-- Tailwind CDN警告を抑制 -->
+<script>
+  (function(){
+    var origWarn = console.warn;
+    console.warn = function(){
+      if (arguments.length > 0 && typeof arguments[0] === 'string'
+          && arguments[0].indexOf('cdn.tailwindcss.com') !== -1) return;
+      origWarn.apply(console, arguments);
+    };
+  })();
+</script>
+
+<!-- ライブラリ(バージョン固定) -->
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/dayjs@1/dayjs.min.js"></script>
-<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js"></script>
+<script src="https://unpkg.com/lucide@0.474.0/dist/umd/lucide.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+
+<!-- lucide 安全初期化(読み込み失敗時にエラーを防ぐスタブ) -->
+<script>
+  if (typeof lucide === 'undefined') {
+    window.lucide = { createIcons: function(){
+      // フォールバック: 100msごとに本物のlucideを待つ
+      var w = window;
+      var retry = setInterval(function(){
+        if (typeof w.__lucideReal !== 'undefined') {
+          clearInterval(retry);
+          w.lucide = w.__lucideReal;
+          try { w.lucide.createIcons(); } catch(e){}
+        }
+      }, 100);
+    }};
+  } else {
+    window.__lucideReal = lucide;
+  }
+</script>
+
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+JP:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
 <style>
@@ -502,6 +536,27 @@
 <div id="print-page" class="hidden"></div>
 
 <script>
+
+/* =========================================================
+   lucide 安全ラッパー(全 createIcons 呼び出しに使用)
+   ========================================================= */
+function safeCreateIcons() {
+  if (typeof lucide !== 'undefined' && lucide.createIcons) {
+    try { lucide.createIcons(); }
+    catch(e) { console.error('[icon] failed:', e); }
+  }
+}
+// 既存の lucide.createIcons() 呼び出しをそのまま使えるようにする
+if (typeof lucide === 'undefined') {
+  // 万が一の場合のフォールバック
+  window.lucide = window.lucide || { createIcons: safeCreateIcons };
+}
+
+
+
+
+
+
 /* =========================================================
    設定
    ========================================================= */
@@ -1801,8 +1856,21 @@ document.getElementById("btn-refresh").addEventListener("click", ()=>{ if(!isLoa
    起動
    ========================================================= */
 window.addEventListener("DOMContentLoaded", ()=>{
-  lucide.createIcons();
+  // lucide ロード待ち
+  function waitLucide(cb){
+    if (typeof lucide !== 'undefined' && lucide.createIcons && lucide.icons) {
+      cb();
+    } else {
+      setTimeout(()=>waitLucide(cb), 50);
+    }
+  }
+  waitLucide(()=>{
+    try { lucide.createIcons(); } catch(e) { console.error('lucide init error:', e); }
+  });
+
   const hash=(location.hash||"").replace("#","");
+
+
   const valid=["dashboard","equipment","reservations","calendar","masters"];
   switchTab(valid.includes(hash)?hash:"dashboard");
   if(!getApiUrl()){ setStatus("idle","接続URLが未設定です"); openSetupModal(); }
